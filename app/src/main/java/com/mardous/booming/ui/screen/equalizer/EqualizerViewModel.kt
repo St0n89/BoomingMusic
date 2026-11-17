@@ -178,6 +178,10 @@ class EqualizerViewModel(
         equalizerManager.setEnableSkipSilence(enabled)
     }
 
+    fun setEnableClearAudio(enabled: Boolean) = viewModelScope.launch {
+        equalizerManager.setEnableClearAudio(enabled)
+    }
+
     fun setVolume(volume: Float, apply: Boolean = true) = viewModelScope.launch {
         equalizerManager.setVolume(volume, apply)
     }

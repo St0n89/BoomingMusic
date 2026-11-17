@@ -66,6 +66,7 @@ import com.mardous.booming.playback.equalizer.engine.BasicEQEngine
 import com.mardous.booming.playback.equalizer.engine.DynamicsProcessingEngine
 import com.mardous.booming.playback.equalizer.engine.EQEngine
 import com.mardous.booming.playback.processor.BalanceAudioProcessor
+import com.mardous.booming.playback.processor.ClearAudioAudioProcessor
 import com.mardous.booming.playback.processor.ReplayGainAudioProcessor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -97,6 +98,7 @@ class EqualizerManager(
     private val context: Context,
     private val balanceProcessor: BalanceAudioProcessor,
     private val replayGainProcessor: ReplayGainAudioProcessor,
+    private val clearAudioProcessor: ClearAudioAudioProcessor,
     private val eqRepository: RealAutoEqRepository,
     audioOutputObserver: AudioOutputObserver,
 ) {
@@ -192,6 +194,11 @@ class EqualizerManager(
             .flowOn(Dispatchers.Main)
             .launchIn(eqScope)
          */
+
+        soundSettings.map { it.clearAudio }
+            .onEach { enabled -> clearAudioProcessor.setEnabled(enabled) }
+            .flowOn(Dispatchers.Main)
+            .launchIn(eqScope)
 
         audioOutputObserver.audioDevice
             .onEach { setCurrentDevice(it) }
@@ -654,6 +661,12 @@ class EqualizerManager(
         }
     }
 
+    suspend fun setEnableClearAudio(clearAudio: Boolean) {
+        context.eqDataStore.edit { prefs ->
+            prefs[Keys.CLEAR_AUDIO] = clearAudio
+        }
+    }
+
     suspend fun setVolume(volume: Float, apply: Boolean) {
         if (apply) {
             context.eqDataStore.edit { prefs ->
@@ -1113,7 +1126,8 @@ class EqualizerManager(
             bitPerfect = prefs[Keys.BIT_PERFECT] ?: false,
             audioOffload = prefs[Keys.BIT_PERFECT] != true && prefs[Keys.AUDIO_OFFLOAD] == true,
             audioFloatOutput = prefs[Keys.AUDIO_FLOAT_OUTPUT] ?: false,
-            skipSilence = prefs[Keys.SKIP_SILENCE] ?: false
+            skipSilence = prefs[Keys.SKIP_SILENCE] ?: false,
+            clearAudio = prefs[Keys.CLEAR_AUDIO] ?: false
         )
     }
 
@@ -1156,6 +1170,7 @@ class EqualizerManager(
             val AUDIO_OFFLOAD = booleanPreferencesKey("audio.offload")
             val AUDIO_FLOAT_OUTPUT = booleanPreferencesKey("audio.float_output")
             val SKIP_SILENCE = booleanPreferencesKey("audio.skip_silence")
+            val CLEAR_AUDIO = booleanPreferencesKey("audio.clear_audio")
             val REPLAYGAIN_MODE = stringPreferencesKey("replaygain.mode")
             val REPLAYGAIN_PREAMP = floatPreferencesKey("replaygain.preamp")
             val REPLAYGAIN_PREAMP_WITHOUT_GAIN = floatPreferencesKey("replaygain.preamp.without_gain")

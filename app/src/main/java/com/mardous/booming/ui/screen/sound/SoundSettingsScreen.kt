@@ -88,6 +88,7 @@ fun SoundSettingsSheet(
     val audioOffload = soundSettings.audioOffload
     val audioFloatOutput = soundSettings.audioFloatOutput
     val skipSilence = soundSettings.skipSilence
+    val clearAudio = soundSettings.clearAudio
     val balance = soundSettings.balance
     val tempo = soundSettings.tempo
 
@@ -523,6 +524,15 @@ fun SoundSettingsSheet(
                             description = stringResource(R.string.skip_silence_description)
                         ) { checked ->
                             viewModel.setEnableSkipSilences(checked)
+                        }
+
+                        LabeledSwitch(
+                            checked = clearAudio,
+                            enabled = enableAudioEffects,
+                            title = stringResource(R.string.enable_clear_audio_title),
+                            description = stringResource(R.string.enable_clear_audio_description)
+                        ) { checked ->
+                            viewModel.setEnableClearAudio(checked)
                         }
                     }
                 }

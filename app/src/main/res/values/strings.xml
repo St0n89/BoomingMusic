@@ -547,6 +547,8 @@
     <string name="enable_audio_float_output_description">Enables 32-bit floating-point output for maximum fidelity. App restart required.</string>
     <string name="skip_silence_title">Skip Silence</string>
     <string name="skip_silence_description">Automatically detects and omits silent sections. Ideal for podcasts and voice recordings.</string>
+    <string name="enable_clear_audio_title">ClearAudio+ (DSEE AI)</string>
+    <string name="enable_clear_audio_description">Reconstructs high frequencies and refines the sound using a software re-implementation of Sony\'s DSEE AI. 48 kHz sources only.</string>
 
     <!-- Lyrics viewer -->
     <string name="action_show_lyrics">Show lyrics</string>

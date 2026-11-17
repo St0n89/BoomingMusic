@@ -80,6 +80,7 @@ import com.mardous.booming.playback.library.LibraryProvider
 import com.mardous.booming.playback.library.MediaIDs
 import com.mardous.booming.playback.processor.BalanceAudioProcessor
 import com.mardous.booming.playback.processor.ReplayGainAudioProcessor
+import com.mardous.booming.playback.processor.ClearAudioAudioProcessor
 import com.mardous.booming.playback.renderer.AlacWorkaroundCodecSelector
 import com.mardous.booming.playback.renderer.BoomingMusicRenderersFactory
 import com.mardous.booming.util.CLEAR_QUEUE_ON_COMPLETION
@@ -162,6 +163,7 @@ class PlaybackService :
     private val playerThread = HandlerThread("Booming-ExoPlayer", Process.THREAD_PRIORITY_AUDIO)
     private val balanceProcessor: BalanceAudioProcessor by inject()
     private val replayGainProcessor: ReplayGainAudioProcessor by inject()
+    private val clearAudioProcessor: ClearAudioAudioProcessor by inject()
 
     private lateinit var nm: NotificationManager
     private lateinit var persistentStorage: PersistentStorage
@@ -269,7 +271,7 @@ class PlaybackService :
                         .build(), handleAudioFocus
                 )
                 .setRenderersFactory(
-                    BoomingMusicRenderersFactory(this, balanceProcessor, replayGainProcessor)
+                    BoomingMusicRenderersFactory(this, balanceProcessor, replayGainProcessor, clearAudioProcessor)
                         .setEnableAudioFloatOutput(equalizerManager.soundSettings.value.audioFloatOutput)
                         .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
                         .setMediaCodecSelector(AlacWorkaroundCodecSelector())
