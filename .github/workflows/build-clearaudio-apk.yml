@@ -18,8 +18,12 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # Kein setup-android noetig: ubuntu-latest bringt das Android-SDK mit
+      # (ANDROID_HOME gesetzt, Lizenzen akzeptiert). setup-android@v3 stirbt
+      # am nicht mehr existierenden Paket 'tools'.
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
 
       - name: Build APK
         run: ./gradlew assembleGithubDebug --no-daemon
