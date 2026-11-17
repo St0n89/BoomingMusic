@@ -606,23 +606,33 @@ fun EqualizerScreen(
                 .padding(contentPadding)
         ) {
             if (eqState.isDisabledByReason) {
-                eqState.disableReason?.let {
+                val disableReason = eqState.disableReason
+                if (disableReason == EqState.DisableReason.ClearAudio) {
                     item {
-                        EmptyView(
-                            icon = painterResource(R.drawable.ic_equalizer_24dp),
-                            title = stringResource(it.titleRes),
-                            modifier = Modifier.fillParentMaxSize()
-                        )
-                    }
-                }
-                if (eqState.disableReason == EqState.DisableReason.ClearAudio) {
-                    item {
-                        // Schnellzugriff: ClearAudio+ direkt hier abschaltbar
+                        // Schnellzugriff: ClearAudio+ direkt hier abschaltbar.
+                        // WICHTIG: ueber der EmptyView, sonst versteckt die
+                        // full-size-EmptyView den Schalter unter dem fold und der
+                        // Modus wirkt "nicht abschaltbar".
                         MaterialSwitch(
                             title = stringResource(R.string.enable_clear_audio_title),
                             subtitle = stringResource(R.string.clear_audio_mode_hint),
                             isChecked = true,
                             onClick = { eqViewModel.setEnableClearAudio(false) }
+                        )
+                    }
+                }
+                if (disableReason != null) {
+                    item {
+                        EmptyView(
+                            icon = painterResource(R.drawable.ic_equalizer_24dp),
+                            title = stringResource(disableReason.titleRes),
+                            modifier = if (disableReason == EqState.DisableReason.ClearAudio) {
+                                // Nicht full-size, damit der Schalter oben im
+                                // Viewport bleibt und nicht weggeschoben wird.
+                                Modifier.fillParentMaxWidth()
+                            } else {
+                                Modifier.fillParentMaxSize()
+                            }
                         )
                     }
                 }

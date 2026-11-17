@@ -42,7 +42,16 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
             (inputAudioFormat.channelCount == 1 || inputAudioFormat.channelCount == 2) &&
             (inputAudioFormat.encoding == C.ENCODING_PCM_16BIT || inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT)
         if (!ok) {
-            throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
+            // WICHTIG: hier darf NIEMALS UnhandledAudioFormatException geworfen werden!
+            // Die DefaultAudioSink wrappt die in eine ConfigurationException, und die
+            // stoppt die Wiedergabe komplett (ExoPlayer-Fehler). Da fast die gesamte
+            // Musik-Bibliothek 44.1 kHz ist, wuerde jeder PCM-Track ohne Offload
+            // sterben. Stattdessen NOT_SET zurueckgeben: der Processor wird dann
+            // von der AudioProcessingPipeline sauber ueberbrueckt (Bypass), und
+            // 44.1-kHz-Material laeuft unveraendert durch. DSP-Verarbeitung bleibt
+            // auf den 48-kHz-Fall beschraenkt (wie Sony: gucf-Tabelle a waere der
+            // 44.1-kHz-Pfad, spaeter).
+            return AudioProcessor.AudioFormat.NOT_SET
         }
         channels = inputAudioFormat.channelCount
         floatIn = inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT
