@@ -155,6 +155,13 @@ object Tables {
         doubleArrayOf(-5.25,-0.01953125,0.19140625,0.625),
         doubleArrayOf(-7.25,-0.08203125,0.11328125,0.3671875),
         doubleArrayOf(-200.0,0.0,0.0,0.0))
+    // GUCF-A: Tabelle 'a' (regTbl3x4_a) = mode 2 @ 44.1 kHz, gleicher
+    // -32->-200-Fixup wie _load_gucf_C (Julia-Referenz DsxSim.jl ~247).
+    val GUCF_A = arrayOf(
+        doubleArrayOf(-1.75,0.138671875,0.146484375,0.65625),
+        doubleArrayOf(-6.5,0.021484375,0.228515625,0.5703125),
+        doubleArrayOf(-7.0,-0.064453125,0.150390625,0.4375),
+        doubleArrayOf(-200.0,0.0,0.0,0.0))
     val NOISE_SCALE = 1.5295020557472908e-5
     val GDCF_A = 1.0
     val GDCF_CAP = 20.0

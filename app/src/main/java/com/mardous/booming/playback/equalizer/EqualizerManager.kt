@@ -76,6 +76,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.filterNot
@@ -161,12 +162,14 @@ class EqualizerManager(
                     setSessionIsActive(false, newState)
                 }
             }
+            .catch { e -> Log.e(TAG, "eqState collect failed", e) }
             .launchIn(eqScope)
 
         liveSoundSettings.map { it.balance }
             .onEach { balanceState ->
                 balanceProcessor.setBalance(balanceState.left, balanceState.right)
             }
+            .catch { e -> Log.e(TAG, "balance collect failed", e) }
             .flowOn(Dispatchers.Main)
             .launchIn(eqScope)
 
@@ -197,11 +200,13 @@ class EqualizerManager(
 
         soundSettings.map { it.clearAudio }
             .onEach { enabled -> clearAudioProcessor.setEnabled(enabled) }
+            .catch { e -> Log.e(TAG, "clearAudio collect failed", e) }
             .flowOn(Dispatchers.Main)
             .launchIn(eqScope)
 
         audioOutputObserver.audioDevice
             .onEach { setCurrentDevice(it) }
+            .catch { e -> Log.e(TAG, "audioDevice collect failed", e) }
             .flowOn(IO)
             .launchIn(eqScope)
     }
@@ -241,7 +246,11 @@ class EqualizerManager(
 
     fun release() {
         setSession(EqSession(SessionType.Internal, NO_SESSION_ID, false))
-        eqEngine?.release()
+        try {
+            eqEngine?.release()
+        } catch (e: Exception) {
+            Log.e(TAG, "eqEngine release failed", e)
+        }
         eqEngine = null
     }
 

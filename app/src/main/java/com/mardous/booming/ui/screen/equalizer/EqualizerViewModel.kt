@@ -43,6 +43,7 @@ import com.mardous.booming.extensions.files.getFileProviderUri
 import com.mardous.booming.extensions.resolveActivity
 import com.mardous.booming.extensions.showToast
 import com.mardous.booming.playback.equalizer.EqualizerManager
+import com.mardous.booming.playback.processor.ClearAudioAudioProcessor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
@@ -68,11 +69,15 @@ import kotlin.time.Duration.Companion.milliseconds
 class EqualizerViewModel(
     private val equalizerManager: EqualizerManager,
     private val audioOutputObserver: AudioOutputObserver,
-    private val mediaStoreWriter: MediaStoreWriter
+    private val mediaStoreWriter: MediaStoreWriter,
+    clearAudioProcessor: ClearAudioAudioProcessor
 ) : ViewModel() {
 
     val equalizerSettings = equalizerManager.equalizerSettings
     val soundSettings = equalizerManager.soundSettings
+
+    /** Live-Status des ClearAudio+-Processors (Schalter + aktiv in der Kette). */
+    val clearAudioStatus = clearAudioProcessor.status
 
     val audioDevice = audioOutputObserver.audioDevice
     val bitPerfectState = audioOutputObserver.bitPerfectState

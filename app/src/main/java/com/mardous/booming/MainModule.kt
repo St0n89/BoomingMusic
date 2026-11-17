@@ -309,7 +309,8 @@ private val viewModule = module {
         EqualizerViewModel(
             equalizerManager = get(),
             audioOutputObserver = get(),
-            mediaStoreWriter = get()
+            mediaStoreWriter = get(),
+            clearAudioProcessor = get()
         )
     }
 

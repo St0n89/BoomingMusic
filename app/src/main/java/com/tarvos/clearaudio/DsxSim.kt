@@ -107,7 +107,8 @@ class DsxSimulator(val cfg: DsxConfig = DsxConfig()) {
         bank2a = DseeAi.bank84FromLevel(cfg.nn2Index)
         bank2b = DseeAi.bank84FromLevel(cfg.nn2Index + 4)
         orgbank = DseeAi.bank84FromLevel(16)
-        gucfC = Tables.GUCF_C.copyOf()
+        // Wie _load_gucf_C: Tabelle 'b' fuer (mode2, 48 kHz), 'a' fuer (mode2, 44.1 kHz).
+        gucfC = (if (cfg.sr == 44100) Tables.GUCF_A else Tables.GUCF_C).map { it.copyOf() }.toTypedArray()
         lcgState = cfg.lcgSeed
     }
 
