@@ -18,8 +18,9 @@ import kotlinx.coroutines.flow.StateFlow
  * [enabled] = Master-Schalter-Stellung (Nutzer-Setting),
  * [activeInChain] = der Processor verarbeitet tatsächlich im Moment (Format
  * unterstützt: 44.1/48 kHz, 1-2 Kanäle, PCM16/Float). [sampleRate]/
- * [channelCount] beschreiben das Format, das der Processor zuletzt gesehen
- * hat (0 = noch kein Stream).
+ * [channelCount] beschreiben das EINGANGS-Format, das der Processor zuletzt
+ * gesehen hat (0 = noch kein Stream). Die Ausgabe läuft mit der doppelten
+ * Rate (88.2/96 kHz), siehe [ClearAudioAudioProcessor].
  */
 data class ClearAudioStatus(
     val enabled: Boolean,
@@ -39,29 +40,36 @@ data class ClearAudioStatus(
  * UnhandledAudioFormatException, da die DefaultAudioSink daraus eine
  * ConfigurationException macht, die die Wiedergabe komplett stoppt).
  *
- * Verarbeitet in 256er-Bloecken mit Zero-Pad-Flush am Streamende.
+ * Phase 3e - decode-faithful 2x-Architektur (KNOWLEDGE 196/198, "MODE =
+ * Upsampling-Faktor"): dsx_process liefert je 64er-Eingabeblock MODE*64 =
+ * 128 Ausgangswerte bei doppelter Rate. Der Processor konfiguriert deshalb
+ * 44.1 -> 88.2 kHz bzw. 48 -> 96 kHz Ausgabe:
  *
- * Wichtig zur DSP-Verkabelung (ehrlich dokumentiert): der portierte
- * dsx_process-Pfad (DsxSimulator) liefert der Firmware-Analyse nach nur das
- * rekonstruierte Hochtonband zurueck, kein Vollbandsignal. Messungen am
- * Referenz-Port: fir2band ist ein ~12-18-kHz-Bandpass (1-kHz-Sinus liegt am
- * Ausgang bei ca. -77 dB), und das reine Wet-Signal liegt je nach Material
- * bei -55 bis -97 dB (Referenz-treu, die Julia-Fixtures zeigen dasselbe).
- * Die Summenstelle und die Aussteuerung des Wet-Bands ("replace"-Semantik im
- * high_pow-Register, fehlende h+0x130-IIR-Koeffizienten) sind im Firmware-
- * Disassembly nicht dekodiert. Dieser Processor macht deshalb die klassische
- * Bandwidth-Extension-Mischung mit adaptiver Aussteuerung:
+ *   out2x = site1_upcon(raw) + wet2x
  *
- *   out = dry + g * wet,   g pro 256er-Frame so, dass
- *   rms(g*wet) ~ TARGET_WET_RATIO * rms(dry)
+ *  - site1_upcon(raw) = Fullband-2x-Upsampling des Eingangs mit der
+ *    Firmware-Fenstertabelle (0xc2ddc @48k / 0xc2d78 @44.1k, gemessen:
+ *    Gain 1.0, Image-Rejection ~47 dB).
+ *  - wet2x = GUCF-Band (downcon(IIR(raw)) -> adaptiver GUCF-Kern -> upcon
+ *    x8) plus Rausch-Upcon, beide akkumuliert der Firmware nach w4=1
+ *    direkt auf den Site-1-Output in bw+0x714 (kein separater Mischpunkt).
  *
- * Der Dry-Anteil wird um die gemessene Gruppenlaufzeit des Wet-Pfads (exakt
- * 64 Samples bei 44.1 und 48 kHz, Impulsmessung) verzoegert, damit sich die
- * Hochtonanteile phasenrichtig addieren. Die adaptives Gain-Design garantiert:
- * effektiver, hoerbarer HF-Anteil bei lautheitsneutralem Gesamtsignal, auch
- * wenn das rohe Wet-Signal je nach Material um 40 dB variiert. Attack max
- * +18 dB/Frame, Release ca. -3 dB/Frame, Silence-Floor (kein Boost des
- * Rauschens in Stillen), Absolute Kappung bei MAX_WET_GAIN.
+ * KEINE Normalisierung, KEIN adaptiver Gain: gemessen liegt das Wet-Band
+ * natuerlich ca. -34 dB unter dem Dry (ueber den Pegelbereich stabil) und
+ * wirkt als ~+1 dB HF-Anhebung im 18-24-kHz-Band. Die Phase-3d-RMS-
+ * Normalisierung (TARGET_WET_RATIO) hob genau dieses Signal um 40-80 dB
+ * an und war die Ursache des hoerbaren Hochton-Rauschens ("shh shh").
+ *
+ * Ist der Schalter beim Configure aus, gibt der Processor NOT_SET zurueck
+ * (1x-Passthrough, keine Kosten); ein mid-stream Einschalten greift dann
+ * erst beim naechsten Stream. Wird der Schalter mitten im Stream abge-
+ * schaltet, bleibt das Ausgabeformat 2x (Formatwechsel nur per
+ * onConfigure): dann laeuft das reine Site-1-Upsampling ohne Effektanteil.
+ *
+ * Verarbeitet in 256er-Bloecken mit Zero-Pad-Flush am Streamende; alle
+ * Bloecke eines queueInput-Aufrufs werden in EINEN Output-Buffer geschrieben
+ * (BaseAudioProcessor.replaceOutputBuffer ueberschreibt noch nicht
+ * abgeholte Buffer kommentarlos - Bugfix aus Phase 3d).
  */
 @OptIn(UnstableApi::class)
 class ClearAudioAudioProcessor : BaseAudioProcessor() {
@@ -88,10 +96,8 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
     private var simConfig: Config? = null
     private var pending: Array<DoubleArray>? = null   // je Kanal bis 255 Samples
     private var pendingCount = 0
-    private var dryTail: Array<DoubleArray>? = null   // je Kanal letzte DRY_DELAY Dry-Samples
-    private var wetGain = 0.0                          // adaptiver Wet-Gain (Attack/Release)
 
-    /** Master-Schalter (Settings/UI). Bei false: byteweises Passthrough. */
+    /** Master-Schalter (Settings/UI). Bei false mid-stream: Site-1-Upsampling. */
     @Synchronized
     fun setEnabled(value: Boolean) {
         enabled = value
@@ -103,20 +109,37 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
         val ok = (sr == 44100 || sr == 48000) &&
             (inputAudioFormat.channelCount == 1 || inputAudioFormat.channelCount == 2) &&
             (inputAudioFormat.encoding == C.ENCODING_PCM_16BIT || inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT)
-        if (!ok) {
+        if (!ok || !enabled) {
             // Bypass: NOT_SET signalisiert der Pipeline, diesen Processor zu
-            // ueberbruecken. NIEMALS UnhandledAudioFormatException werfen.
-            sampleRate = 0
-            channels = 0
+            // ueberbruecken (Format unguenstig ODER Schalter aus: dann kostet
+            // ClearAudio+ gar nichts und die Ausgabe bleibt 1x). NIEMALS
+            // UnhandledAudioFormatException werfen.
+            sampleRate = if (ok) sr else 0
+            channels = if (ok) inputAudioFormat.channelCount else 0
             floatIn = false
-            _status.value = _status.value.copy(activeInChain = false, sampleRate = 0, channelCount = 0)
+            if (!ok) {
+                simulator = null
+                simConfig = null
+                pending = null
+                pendingCount = 0
+            }
+            _status.value = _status.value.copy(
+                activeInChain = false,
+                sampleRate = if (ok) sr else 0,
+                channelCount = if (ok) inputAudioFormat.channelCount else 0
+            )
             return AudioProcessor.AudioFormat.NOT_SET
         }
         sampleRate = sr
         channels = inputAudioFormat.channelCount
         floatIn = inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT
         _status.value = _status.value.copy(activeInChain = true, sampleRate = sr, channelCount = channels)
-        return inputAudioFormat
+        // Decode-faithful: MODE=2 bedeutet 2x-Upsampling, dsx_process gibt
+        // 128 Werte je 64er-Block aus. Ausgabeformat = doppelte Rate,
+        // Kanalzahl/Encoding unveraendert.
+        return AudioProcessor.AudioFormat(
+            2 * sr, channels, inputAudioFormat.encoding
+        )
     }
 
     override fun onFlush() {
@@ -131,20 +154,17 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
         simConfig = null
         pending = null
         pendingCount = 0
-        dryTail = null
-        wetGain = 0.0
     }
 
     override fun onQueueEndOfStream() {
         val sim = simulator
         val pend = pending
-        if (enabled && sim != null && pend != null && pendingCount > 0) {
+        if (sim != null && pend != null && pendingCount > 0) {
             // angebrochenen Frame mit Nullen auffuellen und verarbeiten (Firmware-Flush)
             val frame = Array(channels) { ch ->
                 DoubleArray(FRAME) { if (it < pendingCount) pend[ch][it] else 0.0 }
             }
-            val wet = scaleWet(sim.executeFrame(frame), frame)
-            emitFrames(listOf(wet), listOf(frame))
+            emitFrames(listOf(processFrame(sim, frame)))
         }
         pending = null
         pendingCount = 0
@@ -160,15 +180,6 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
         // byte-gedreht: aus 0.026 wird 0.68).
         inputBuffer.order(ByteOrder.LITTLE_ENDIAN)
 
-        if (!enabled) {
-            // 1:1-Passthrough wenn per Settings abgeschaltet
-            val buffer = replaceOutputBuffer(remaining)
-            buffer.order(ByteOrder.LITTLE_ENDIAN)
-            buffer.put(inputBuffer)
-            buffer.flip()
-            return
-        }
-
         val cfg = Config(sampleRate, channels, floatIn)
         var sim = simulator
         if (sim == null || simConfig != cfg) {
@@ -179,12 +190,10 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
                 simConfig = cfg
                 pending = null
                 pendingCount = 0
-                dryTail = null
             }
         }
 
         val outBlocks = ArrayList<Array<DoubleArray>>()
-        val dryBlocks = ArrayList<Array<DoubleArray>>()
         val bytesPerFrame = channels * (if (floatIn) 4 else 2)
         while (inputBuffer.remaining() >= bytesPerFrame) {
             val pend = pending ?: Array(channels) { DoubleArray(FRAME) }.also { pending = it }
@@ -195,86 +204,52 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
             }
             pendingCount++
             if (pendingCount == FRAME) {
-                // Dry-Kopie vor der Verarbeitung: das Original wird als
-                // verzögertes Basisband wieder zugemischt.
-                val dry = Array(channels) { ch -> pend[ch].copyOf() }
-                val wet = scaleWet(sim.executeFrame(pend), dry)
-                outBlocks.add(wet)
-                dryBlocks.add(dry)
+                outBlocks.add(processFrame(sim, pend))
                 pendingCount = 0
             }
         }
         if (outBlocks.isNotEmpty()) {
-            emitFrames(outBlocks, dryBlocks)
+            emitFrames(outBlocks)
         }
     }
 
     /**
-     * Adaptiver Wet-Gain: skaliert das rohe Wet-Signal so, dass sein RMS je
-     * Frame TARGET_WET_RATIO des Dry-RMS erreicht (das rohe Wet liegt je
-     * nach Material bei -55 bis -97 dB und waere bei festem Gain unhoerbar
-     * bzw. bei festem Hoch-Gain bei bandlimitiertem Material uebersteuert).
-     * Attack max +18 dB/Frame, Release ca. -3 dB/Frame, Silence-Floor,
-     * Kappung bei MAX_WET_GAIN. Der Gain gilt global (beide Kanaele), um
-     * das Stereo-Bild nicht zu verwackeln.
+     * Ein 256er-Eingabeframe -> 512 Ausgangswerte je Kanal @2x Rate.
+     * Einschalterstellung entscheidet ueber den Modus; das Ausgabeformat
+     * bleibt in beiden Faellen 2x (siehe KDoc der Klasse).
      */
-    private fun scaleWet(wet: Array<DoubleArray>, dry: Array<DoubleArray>): Array<DoubleArray> {
-        var dryAcc = 0.0
-        var wetAcc = 0.0
-        for (ch in 0 until dry.size) {
-            for (i in 0 until dry[ch].size) {
-                dryAcc += dry[ch][i] * dry[ch][i]
-                wetAcc += wet[ch][i] * wet[ch][i]
+    private fun processFrame(sim: DsxSimulator, frame: Array<DoubleArray>): Array<DoubleArray> {
+        return if (enabled) {
+            val (dry, wet) = sim.executeFrameDryWet(frame)
+            Array(frame.size) { ch ->
+                val d = dry[ch]
+                val w = wet[ch]
+                DoubleArray(d.size) { i -> d[i] + w[i] }
             }
-        }
-        val n = dry.size * dry[0].size
-        val dryRms = Math.sqrt(dryAcc / n)
-        val wetRms = Math.sqrt(wetAcc / n)
-        if (dryRms < MIN_DRY_RMS) {
-            // Stille: Wet nicht hochziehen (Rauschfloor-Boost vermeiden)
-            wetGain *= 0.7
         } else {
-            val gTarget = (TARGET_WET_RATIO * dryRms / (wetRms + 1e-12))
-                .coerceAtMost(MAX_WET_GAIN)
-            val attackCap = maxOf(wetGain * 8.0, 1.0)
-            wetGain = if (gTarget > wetGain) minOf(gTarget, attackCap)
-                      else maxOf(gTarget, wetGain * 0.7)
-        }
-        val g = wetGain
-        return Array(wet.size) { ch ->
-            DoubleArray(wet[ch].size) { i -> wet[ch][i] * g }
+            sim.executeFrameUpsample2x(frame)
         }
     }
 
     /**
      * Schreibt alle Bloecke eines queueInput-Aufrufs in EINEN Output-Buffer
-     * (Bugfix: frueher wurde pro 256er-Block replaceOutputBuffer() aufgerufen,
-     * was einen noch nicht abgehholten Buffer kommentarlos ueberschrieben hat;
-     * bei Sink-Chunks > 256 Frames gingen alle Bloecke bis auf den letzten
-     * verloren, daher "spielt an, aber nichts aendert sich").
-     *
-     * Mischung: out[t] = dry[t - DRY_DELAY] + wet[t] (wet bereits mit dem
-     * adaptiven Gain von scaleWet skaliert). Die ersten DRY_DELAY Samples
-     * eines Aufrufs kommen aus dryTail (letzte 64 Dry-Samples des
-     * Vorgaenger-Aufrufs; am Streamanfang Stille).
+     * (Bugfix aus Phase 3d: frueher wurde pro 256er-Block
+     * replaceOutputBuffer() aufgerufen, was einen noch nicht abgeholten
+     * Buffer kommentarlos ueberschrieben hat; bei Sink-Chunks > 256 Frames
+     * gingen alle Bloecke bis auf den letzten verloren, daher "spielt an,
+     * aber nichts aendert sich"). Jeder Block ist bereits @2x (512 je
+     * 256er-Frame je Kanal).
      */
-    private fun emitFrames(outBlocks: List<Array<DoubleArray>>, dryBlocks: List<Array<DoubleArray>>) {
+    private fun emitFrames(outBlocks: List<Array<DoubleArray>>) {
         if (outBlocks.isEmpty()) return
-        val tail = dryTail ?: Array(channels) { DoubleArray(DRY_DELAY) }.also { dryTail = it }
-        val frameLen = dryBlocks[0][0].size
-        val total = dryBlocks.sumOf { it[0].size }
+        val frameLen = outBlocks[0][0].size
+        val total = outBlocks.sumOf { it[0].size }
         val buffer = replaceOutputBuffer(total * channels * (if (floatIn) 4 else 2))
         buffer.order(ByteOrder.LITTLE_ENDIAN)
-        var t = 0
-        for (bi in dryBlocks.indices) {
-            val dry = dryBlocks[bi]
-            val wet = outBlocks[bi]
+        for (block in outBlocks) {
             for (s in 0 until frameLen) {
-                val j = t - DRY_DELAY
                 for (ch in 0 until channels) {
-                    val dryVal = if (j < 0) tail[ch][j + DRY_DELAY]
-                                 else dryBlocks[j / frameLen][ch][j % frameLen]
-                    val v = dryVal + wet[ch][s]
+                    val v = block[ch][s]
                     if (floatIn) {
                         buffer.putInt(v.toFloat().toBits())
                     } else {
@@ -282,38 +257,12 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
                         buffer.putShort(iv.toShort())
                     }
                 }
-                t++
             }
         }
         buffer.flip()
-        // dryTail auf die letzten DRY_DELAY Dry-Samples dieses Aufrufs setzen
-        for (ch in 0 until channels) {
-            var k = 0
-            for (i in total - DRY_DELAY until total) {
-                tail[ch][k++] = dryBlocks[i / frameLen][ch][i % frameLen]
-            }
-        }
     }
 
     companion object {
         const val FRAME = 256
-
-        /** Gruppenlaufzeit des Wet-Pfads in Samples (Impulsmessung, bei 44.1 und 48 kHz identisch). */
-        const val DRY_DELAY = 64
-
-        /**
-         * Ziel-Anteil des Wet-Bands am Dry-Signal (RMS je Frame).
-         * 0.3 = Wet ca. -10.5 dB unter Dry: gemessen +2.3 bis +3 dB HF-Shelf
-         * bei bereits hoher Frequenz (48/44.1 kHz), +15 dB Rekonstruktion bei
-         * bandlimitiertem Material, Gesamt-Lautheit +-0.4 dB.
-         * Hoer-Tuning-Wert.
-         */
-        const val TARGET_WET_RATIO = 0.3
-
-        /** Dry-RMS-Schwelle darunter kein Wet-Boost erfolgt (Stille/Floor). */
-        const val MIN_DRY_RMS = 1e-3
-
-        /** Absolute Kappung des adaptiven Gains (Schutz vor Rausch-Explosion). */
-        const val MAX_WET_GAIN = 1e4
     }
 }

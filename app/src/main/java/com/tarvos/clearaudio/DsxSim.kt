@@ -54,6 +54,9 @@ class ChanWork {
     var up1Prev = DoubleArray(0)      // Site1-Ausgabe (Blend-Zustand)
     var up2Prev = DoubleArray(0)      // Sites-2/3-Ausgabe
     var slots1090 = DoubleArray(16)   // bw+0x1090 (downcon, dezimiert)
+    var lastDry2x = DoubleArray(0)    // Phase-3e: Site1-Fullband-Upcon (128 @2x)
+    var lastWet2x = DoubleArray(0)    // Phase-3e: Synthese-Band outB (128 @2x, bw+0x714)
+    var lastHrFeats = DoubleArray(5)  // Phase-3e: bw+0x1068/0x1078-Persistenz (stale GUCF-Features im procMode-2-Pfad)
     val pads = HashMap<String, DoubleArray>()
 }
 
@@ -120,6 +123,72 @@ class DsxSimulator(val cfg: DsxConfig = DsxConfig()) {
         if (c.bypass != 0 || (c.anaGate == 0 && c.synGate == 0)) {
             return Array(inCh.size) { inCh[it].copyOf() }   // Bypass 192-(2)/(3)
         }
+        prepareAi(inCh)
+        // (8) high_pow
+        return highPow(inCh)
+    }
+
+    /**
+     * Phase-3e: Mode-2-Gesamtausgabe im echten Firmware-Layout (KNOWLEDGE 56b/
+     * 196c/22): dsx_process liefert je 64er-Eingabeblock MODE*64 = 128 Samples
+     * bei 2x Rate (48k->96k). Hier sind beide Anteile getrennt rueckgeliefert:
+     *  - dry2x = Site-1-Fullband-Upcon des Eingangs (WIN-Tabelle, das ist die
+     *    eigene 2x-Upsampling-Strecke der Firmware, schreibt nach bw+0x714),
+     *  - wet2x = Effekt-Band (GUCF-Kern + Rausch-Upcon, akkumuliert auf
+     *    denselben Output; bw+0x714 ohne den Dry-Anteil).
+     * Laenge je Kanal: 2*frame (frame muss Vielfaches von 64 sein).
+     */
+    fun executeFrameDryWet(inCh: Array<DoubleArray>):
+        Pair<Array<DoubleArray>, Array<DoubleArray>> {
+        val c = cfg
+        val n = c.frame
+        require(inCh.all { it.size == n }) { "execute_frame: frame length" }
+        require(n % 64 == 0) { "drywet: frame must be multiple of 64" }
+        require(c.bypass == 0 && !(c.anaGate == 0 && c.synGate == 0)) {
+            "drywet: bypass config"
+        }
+        prepareAi(inCh)
+        return highPowDryWet(inCh)
+    }
+
+    /**
+     * Phase-3e: reines Site-1-Upsampling (Fullband-upcon ohne Effektanteil),
+     * z. B. wenn der Effekt mitten im Stream abgeschaltet wird, das
+     * Ausgabeformat (2x Rate) aber beibehalten werden muss. Nutzt dieselben
+     * pad/up1Prev-Zustaende wie die Synthese, damit Umschalten nahtlos ist.
+     * Rueckgabe: je Kanal frame*MODE Werte (128 je 64er-Block).
+     */
+    fun executeFrameUpsample2x(inCh: Array<DoubleArray>): Array<DoubleArray> {
+        val c = cfg
+        val n = c.frame
+        require(inCh.all { it.size == n }) { "execute_frame: frame length" }
+        require(n % 64 == 0) { "upsample2x: frame must be multiple of 64" }
+        val mode = c.mode
+        val winTbl = if (c.sr == 44100) Tables.WIN_44K_MODE2 else Tables.WIN_48K_MODE2
+        val nblk = maxOf(1, n / 64)
+        val out = Array(inCh.size) { DoubleArray(nblk * mode * 64) }
+        for (i in inCh.indices) {
+            val w = works[i]
+            for (s in 0 until nblk) {
+                val raw = inCh[i].copyOfRange(s * 64, s * 64 + 64)
+                val inp1 = pad(w, "up1", raw, 12)
+                val prev1 = (w.up1Prev + DoubleArray(128)).copyOfRange(0, 128)
+                val up1 = Upcon.upconDirect(
+                    winTbl, 12, mode, inp1, prev1, 0.0, 64, blend = false
+                )
+                w.up1Prev = up1.copyOfRange(0, mode * 64)
+                w.lastDry2x = up1.copyOf()
+                w.lastWet2x = DoubleArray(mode * 64)
+                System.arraycopy(up1, 0, out[i], s * mode * 64, mode * 64)
+            }
+        }
+        return out
+    }
+
+    /** Schritte (1)-(7) aus executeFrame: Staging + NN1/NN2-Auswertung. */
+    private fun prepareAi(inCh: Array<DoubleArray>) {
+        val c = cfg
+        val n = c.frame
 
         // (1) int-Staging: hist + frame
         for (i in inCh.indices) {
@@ -206,8 +275,29 @@ class DsxSimulator(val cfg: DsxConfig = DsxConfig()) {
         }
 
         frames += 1
-        // (8) high_pow
-        return highPow(inCh)
+    }
+
+    /**
+     * Phase-3e: wie highPow, aber je 64er-Block die getrennten 2x-Anteile
+     * (lastDry2x/lastWet2x, je 128) konkatenieren. Rueckgabe: Pair(dry, wet),
+     * beide Laenge nblk*128 je Kanal.
+     */
+    private fun highPowDryWet(inCh: Array<DoubleArray>):
+        Pair<Array<DoubleArray>, Array<DoubleArray>> {
+        val n = inCh[0].size
+        val nblk = maxOf(1, n / 64)
+        val dry = Array(inCh.size) { DoubleArray(nblk * 128) }
+        val wet = Array(inCh.size) { DoubleArray(nblk * 128) }
+        for (s in 0 until nblk) {
+            for (i in inCh.indices) {
+                val blk = inCh[i].copyOfRange(s * 64, s * 64 + 64)
+                dsxProcess(blk, i, s)
+                val w = works[i]
+                System.arraycopy(w.lastDry2x, 0, dry[i], s * 128, 128)
+                System.arraycopy(w.lastWet2x, 0, wet[i], s * 128, 128)
+            }
+        }
+        return Pair(dry, wet)
     }
 
     // -------------------------------------------------------------- high_pow
@@ -234,7 +324,7 @@ class DsxSimulator(val cfg: DsxConfig = DsxConfig()) {
 
         if (c.procMode == 2 || c.procMode == 1) {
             w.sig2d4 = x.copyOf()       // TODO(1): IIR h+0x130 in-place
-            return synthesis(w, cw, sub)
+            return synthesis(w, cw, sub, x)
         }
 
         // Prolog (a): Dezimation; History 40/64
@@ -288,7 +378,7 @@ class DsxSimulator(val cfg: DsxConfig = DsxConfig()) {
         // fir_2band: count 4 -> n2 = 8, nblocks 8 -> 64 Ausgaben
         val enhanced = Exciter.fir2band(coefs, firG0, firG1, w.sig3d4, 8)
         w.sig2d4 = enhanced.copyOfRange(0, 64)
-        return synthesis(w, cw, sub)
+        return synthesis(w, cw, sub, x)
     }
 
     // ------------------------------------------------------------------- pads
@@ -305,40 +395,67 @@ class DsxSimulator(val cfg: DsxConfig = DsxConfig()) {
     }
 
     // -------------------------------------------------------------- _synthesis
-    private fun synthesis(w: ChanWork, cw: CWork, sub: Int): DoubleArray {
+    private fun synthesis(w: ChanWork, cw: CWork, sub: Int, raw: DoubleArray): DoubleArray {
         val c = cfg
         val mode = c.mode
 
-        // upcon-Site1 (nur [h+0x11c0]==0; Fullband, k=12, F=MODE, 48k-Tabelle)
-        val inp1 = pad(w, "up1", w.sig2d4, 12)
-        val prev1 = (w.up1Prev + DoubleArray(128)).copyOfRange(0, 128)
-        val up1 = Upcon.upconDirect(
-            Tables.WIN_48K_MODE2, 12, mode, inp1, prev1, 0.0, 64, blend = false
-        )
-        w.up1Prev = up1.copyOfRange(0, mode * 64)
+        // Phase-3e-Korrektur nach 1ax-Punkt 198: die HR-Kette der Synthese
+        // laeuft auf dem ROHEN Audio (bw+0xd84+2N = Kopie von out[i], das
+        // high_pow mit Roh-Audio gefuellt hat), NICHT auf bw+0x2d4 (das
+        // haelt im procMode-0-Pfad den fir2band-Output der Analyse). Und:
+        // Site-1-upcon schreibt up1 direkt nach bw+0x714 = Ausgabepuffer;
+        // die upcon-Sites 2/3 akkumulieren (w4=1) darauf. Der finale
+        // Effekt-Output ist out = site1_upcon(raw) + wet (natuerliches Level).
+        val up1: DoubleArray
+        val feats: DoubleArray
+        // 1ai/806: Site-1-Fenster und GUCF-src sind ratenabhaengig
+        // (44.1k: 0xc2d78/0xc2e84, 48k: 0xc2ddc/0xc3038; P 0xc31ec gemeinsam).
+        val winTbl = if (c.sr == 44100) Tables.WIN_44K_MODE2 else Tables.WIN_48K_MODE2
+        val srcTbl = if (c.sr == 44100) Tables.SRC_44K_MODE2 else Tables.SRC_48K_MODE2
+        if (c.procMode == 2) {
+            // 198: mode==2 -> 16-Werte-Dezimierungskopie (stride 4) aus dem
+            // rohen Audio nach bw+0x1090, HR-Kette SKIPPED (kein Site1, kein
+            // IIR/mdf_hr/pow/GDCF/downcon). GUCF-Features bleiben stale
+            // (bw+0x1068 persistiert zwischen Bloecken).
+            up1 = DoubleArray(128)
+            w.slots1090 = DoubleArray(16) { raw[4 * it] }
+            feats = w.lastHrFeats.copyOf()
+        } else {
+            // upcon-Site1 (nur [h+0x11c0]==0; Fullband, k=12, F=MODE)
+            val inp1 = pad(w, "up1", raw, 12)
+            val prev1 = (w.up1Prev + DoubleArray(128)).copyOfRange(0, 128)
+            up1 = Upcon.upconDirect(
+                winTbl, 12, mode, inp1, prev1, 0.0, 64, blend = false
+            )
+            w.up1Prev = up1.copyOfRange(0, mode * 64)
 
-        // IIR (HR-Biquad-Kette h+0x11a8, 4 Sektionen)
-        val irRes = Exciter.iirFiltering(
-            c.hrIirCoefs, c.hrPregain, 4, 1, up1.copyOfRange(0, 64), w.hrIirState
-        )
-        val ir = irRes.first
-        w.hrIirState = irRes.second
+            // IIR (HR-Biquad-Kette h+0x11a8, 4 Sektionen) auf dem rohen Audio
+            val irRes = Exciter.iirFiltering(
+                c.hrIirCoefs, c.hrPregain, 4, 1, raw.copyOf(), w.hrIirState
+            )
+            val ir = irRes.first
+            w.hrIirState = irRes.second
 
-        // mdf_hr (Eingang = IIR-Signal) + pow_calc; Slot 4 = IIR-Power (159)
-        val inpHr = pad(w, "hr", ir, 10)
-        val mE = Exciter.mdfHr(c.hrBank, inpHr)
-        val powv = Exciter.powCalc(ir)
-        val feats = DoubleArray(5)
-        for (i in 0..3) feats[i] = mE[i]
-        feats[4] = powv
+            // mdf_hr (Eingang = IIR-Signal) + pow_calc; Slot 4 = IIR-Power (159)
+            val inpHr = pad(w, "hr", ir, 10)
+            val mE = Exciter.mdfHr(c.hrBank, inpHr)
+            val powv = Exciter.powCalc(ir)
+            feats = DoubleArray(5)
+            for (i in 0..3) feats[i] = mE[i]
+            feats[4] = powv
+            w.lastHrFeats = feats.copyOf()
 
-        // GDCF -> downcon-Koeffs (11)
-        val dcoef = Exciter.gdcf(c.hrBank, feats, featIdx, c.gdcfA, c.gdcfCap)
+            // GDCF -> downcon-Koeffs (11)
+            val dcoef = Exciter.gdcf(c.hrBank, feats, featIdx, c.gdcfA, c.gdcfCap)
 
-        // downcon (stride 4, 16 Ausgaenge) auf dem IIR-Signal
-        val inpDc = pad(w, "dc", ir, 10)
-        val dwn = Exciter.downcon(dcoef, inpDc, 4)
-        w.slots1090 = dwn.copyOfRange(0, minOf(16, dwn.size))
+            // downcon (stride 4, 16 Ausgaenge) auf dem IIR-Signal
+            val inpDc = pad(w, "dc", ir, 10)
+            val dwn = Exciter.downcon(dcoef, inpDc, 4)
+            w.slots1090 = dwn.copyOfRange(0, minOf(16, dwn.size))
+        }
+        // Phase-3e: Site-1-Fullband-Upcon als Dry-Anteil (128 @2x) sichern
+        w.lastDry2x = up1.copyOf()
+        val powv = feats[4]
 
         // GUCF (Band-1-Kern): prev = dB_slot2, Slot 3 = 0; Slew 10/-120
         var g3 = cw.g3[sub]
@@ -352,7 +469,7 @@ class DsxSimulator(val cfg: DsxConfig = DsxConfig()) {
         var kern: DoubleArray
         kern = try {
             val k = Upcon.gucf(
-                feats, featIdx, Tables.P_MODE2, Tables.SRC_48K_MODE2, 36,
+                feats, featIdx, Tables.P_MODE2, srcTbl, 36,
                 gucfC, c.gucfMode, slewOn = true, prev = prev4,
                 cUp = 10.0, cDn = -120.0
             )
@@ -377,26 +494,41 @@ class DsxSimulator(val cfg: DsxConfig = DsxConfig()) {
         lcgState = lcgRes.second
         w.noise = DoubleArray(64) { noiseVals[it] * gain }
 
-        // upcon-Sites 2/3: mode 2 -> EIN Call, sonst 2 Calls mit Blend
+        // upcon-Sites 2/3, Dispatch auf procMode [h+0x1250] (198): 2 -> EIN
+        // Call w4=0 (kein Dry, Site1 geskippt); 1 -> BYPASS (nur Site1-Dry);
+        // sonst (0, Real-Speaker-Config) -> ZWEI Calls w4=1, die beide auf
+        // den Site1-Output in bw+0x714 AKKUMULIEREN (GUCF-Band + Rausch-Band).
         val inp2 = pad(w, "up2", w.slots1090, 8)
-        val outB: DoubleArray = if (mode == 2) {
-            Upcon.upconDirect(
-                w.gucfKern, 8, 8, inp2, DoubleArray(128), 0.0, 16, blend = false
-            )
-        } else {
-            val prev2 = (w.up2Prev + DoubleArray(128)).copyOfRange(0, 128)
-            val ob = Upcon.upconDirect(
-                w.gucfKern, 8, 8, inp2, prev2, 1.0, 16, blend = true
-            )
-            val inp3 = pad(w, "up3", w.noise, 2)
-            Upcon.upconDirect(
-                Tables.BW_TBL_MODE2, 2, 8, inp3, ob, 1.0, 16, blend = true
-            )
+        val out: DoubleArray = when (c.procMode) {
+            2 -> {
+                val wet = Upcon.upconDirect(
+                    w.gucfKern, 8, 8, inp2, DoubleArray(128), 0.0, 16, blend = false
+                )
+                w.lastWet2x = wet.copyOf()
+                wet
+            }
+            1 -> {
+                w.lastWet2x = DoubleArray(128)
+                up1.copyOf()
+            }
+            else -> {
+                var wet = DoubleArray(128)
+                wet = Upcon.upconDirect(
+                    w.gucfKern, 8, 8, inp2, wet, 1.0, 16, blend = true
+                )
+                val inp3 = pad(w, "up3", w.noise, 2)
+                wet = Upcon.upconDirect(
+                    Tables.BW_TBL_MODE2, 2, 8, inp3, wet, 1.0, 16, blend = true
+                )
+                w.lastWet2x = wet.copyOf()
+                DoubleArray(128) { up1[it] + wet[it] }
+            }
         }
-        w.up2Prev = outB.copyOfRange(0, 128)
+        // up2Prev entfaellt: Sites 2/3 blenden auf bw+0x714 (Site1-Output
+        // bzw. den akkumulierten Stand), nicht auf einen Vorblock-Zustand.
 
         // finaler Effekt-Output: bw+0x714[0..MODE*64)
-        val result = outB.copyOfRange(0, mode * 64)
+        val result = out.copyOfRange(0, mode * 64)
         val newBandHist = DoubleArray(256)
         System.arraycopy(result, 0, newBandHist, 0, minOf(256, mode * 64))
         System.arraycopy(

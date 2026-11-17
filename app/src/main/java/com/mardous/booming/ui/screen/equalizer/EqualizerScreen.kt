@@ -195,7 +195,7 @@ fun EqualizerScreen(
     // Live-Untertitel: aus/kein Stream -> Hinweis, aktiv -> Rate, uebrigt -> Bypass.
     val clearAudioSubtitle = when {
         clearAudioStatus.enabled && clearAudioStatus.activeInChain ->
-            stringResource(R.string.clear_audio_status_active, clearAudioStatus.sampleRate)
+            stringResource(R.string.clear_audio_status_active, clearAudioStatus.sampleRate * 2)
         clearAudioStatus.enabled ->
             stringResource(R.string.clear_audio_status_bypassed)
         else -> stringResource(R.string.clear_audio_mode_hint)
