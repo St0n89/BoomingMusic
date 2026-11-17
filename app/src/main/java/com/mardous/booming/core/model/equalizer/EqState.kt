@@ -17,7 +17,8 @@ data class EqState(
 
     enum class DisableReason(val titleRes: Int) {
         AudioOffload(R.string.audio_offload_is_enabled),
-        BitPerfect(R.string.bit_perfect_is_active)
+        BitPerfect(R.string.bit_perfect_is_active),
+        ClearAudio(R.string.clear_audio_is_active)
     }
 
     companion object {

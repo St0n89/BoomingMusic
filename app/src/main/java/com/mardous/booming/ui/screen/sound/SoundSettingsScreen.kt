@@ -528,7 +528,6 @@ fun SoundSettingsSheet(
 
                         LabeledSwitch(
                             checked = clearAudio,
-                            enabled = enableAudioEffects,
                             title = stringResource(R.string.enable_clear_audio_title),
                             description = stringResource(R.string.enable_clear_audio_description)
                         ) { checked ->

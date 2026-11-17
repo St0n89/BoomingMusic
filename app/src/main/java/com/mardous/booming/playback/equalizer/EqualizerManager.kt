@@ -1005,6 +1005,7 @@ class EqualizerManager(
             supported = prefs[Keys.EQ_SUPPORTED] ?: false,
             enabled = prefs[Keys.EQ_ENABLED] ?: false,
             disableReason = when {
+                prefs[Keys.CLEAR_AUDIO] == true -> EqState.DisableReason.ClearAudio
                 bitPerfectState.isActive -> EqState.DisableReason.BitPerfect
                 prefs[Keys.AUDIO_OFFLOAD] == true -> EqState.DisableReason.AudioOffload
                 else -> null
@@ -1102,6 +1103,7 @@ class EqualizerManager(
     }
 
     private fun buildSoundSettings(prefs: Preferences): SoundSettings {
+        val clearAudio = prefs[Keys.CLEAR_AUDIO] ?: false
         return SoundSettings(
             volume = VolumeState(
                 currentVolume = prefs[Keys.VOLUME] ?: 1f,
@@ -1118,16 +1120,26 @@ class EqualizerManager(
                 pitchRange = MIN_PITCH..MAX_PITCH,
                 isFixedPitch = prefs[Keys.IS_FIXED_PITCH] ?: true
             ),
-            replayGain = ReplayGainState(
-                mode = prefs[Keys.REPLAYGAIN_MODE]?.toEnum<ReplayGainMode>() ?: ReplayGainMode.Off,
-                preamp = prefs[Keys.REPLAYGAIN_PREAMP] ?: 0f,
-                preampWithoutGain = prefs[Keys.REPLAYGAIN_PREAMP_WITHOUT_GAIN] ?: 0f
-            ),
+            // ClearAudio+ uebernimmt komplett (wie Sony Walkman): ReplayGain und
+            // Offload werden im Modus ignoriert bzw. erzwungen aus.
+            replayGain = if (clearAudio) {
+                ReplayGainState(
+                    mode = ReplayGainMode.Off,
+                    preamp = prefs[Keys.REPLAYGAIN_PREAMP] ?: 0f,
+                    preampWithoutGain = prefs[Keys.REPLAYGAIN_PREAMP_WITHOUT_GAIN] ?: 0f
+                )
+            } else {
+                ReplayGainState(
+                    mode = prefs[Keys.REPLAYGAIN_MODE]?.toEnum<ReplayGainMode>() ?: ReplayGainMode.Off,
+                    preamp = prefs[Keys.REPLAYGAIN_PREAMP] ?: 0f,
+                    preampWithoutGain = prefs[Keys.REPLAYGAIN_PREAMP_WITHOUT_GAIN] ?: 0f
+                )
+            },
             bitPerfect = prefs[Keys.BIT_PERFECT] ?: false,
-            audioOffload = prefs[Keys.BIT_PERFECT] != true && prefs[Keys.AUDIO_OFFLOAD] == true,
+            audioOffload = !clearAudio && prefs[Keys.BIT_PERFECT] != true && prefs[Keys.AUDIO_OFFLOAD] == true,
             audioFloatOutput = prefs[Keys.AUDIO_FLOAT_OUTPUT] ?: false,
             skipSilence = prefs[Keys.SKIP_SILENCE] ?: false,
-            clearAudio = prefs[Keys.CLEAR_AUDIO] ?: false
+            clearAudio = clearAudio
         )
     }
 

@@ -94,6 +94,7 @@ import com.mardous.booming.core.model.audiodevice.AudioDeviceType
 import com.mardous.booming.core.model.equalizer.EqBand
 import com.mardous.booming.core.model.equalizer.EqEngineMode
 import com.mardous.booming.core.model.equalizer.EqProfile
+import com.mardous.booming.core.model.equalizer.EqState
 import com.mardous.booming.core.model.equalizer.ReplayGainState
 import com.mardous.booming.core.model.equalizer.autoeq.AutoEqProfile
 import com.mardous.booming.core.model.equalizer.autoeq.AutoEqSyncState
@@ -614,7 +615,27 @@ fun EqualizerScreen(
                         )
                     }
                 }
+                if (eqState.disableReason == EqState.DisableReason.ClearAudio) {
+                    item {
+                        // Schnellzugriff: ClearAudio+ direkt hier abschaltbar
+                        MaterialSwitch(
+                            title = stringResource(R.string.enable_clear_audio_title),
+                            subtitle = stringResource(R.string.clear_audio_mode_hint),
+                            isChecked = true,
+                            onClick = { eqViewModel.setEnableClearAudio(false) }
+                        )
+                    }
+                }
             } else {
+                item {
+                    // Schnellzugriff: ClearAudio+ als Master-Modus ueber dem Equalizer
+                    MaterialSwitch(
+                        title = stringResource(R.string.enable_clear_audio_title),
+                        subtitle = stringResource(R.string.clear_audio_mode_hint),
+                        isChecked = soundSettings.clearAudio,
+                        onClick = { eqViewModel.setEnableClearAudio(soundSettings.clearAudio.not()) }
+                    )
+                }
                 item {
                     MaterialSwitch(
                         title = stringResource(R.string.enable_equalizer),
