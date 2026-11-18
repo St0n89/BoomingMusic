@@ -13,13 +13,22 @@ package com.tarvos.clearaudio
  *   OUT      = fin[0..128)
  *   Carries  hist/win/(u,v)/D-Shift/FIN-Rotation (fin[0..62) = saOut[66..128))
  *
+ * 44.1 kHz: identische Kette, nur ratenabhaengige Tabellen K65/TAPS/
+ * ROD_SA aus FC44 (KNOWLEDGE 293, bitweise abgenommen gegen die 44.1-
+ * Emulator-Referenz: FAIL=0, ok=4066, dust=30). Der Konstruktor-Parameter
+ * for44k waehlt das Tabellen-Set; alles Andere ist rateninvariant.
  * Der komplette Streaming-State sind 124 f32 je Kanal plus FIN-Tail;
  * Kaltstart = alles 0.0 == APK-Bootfall. Alle Arithmetik in Kotlin-Float
  * (= IEEE f32 je Operation, kein FMA): identische Semantik zur Maschine.
  * Der 0x115-Driver-Staub D[32..52) ist als konstante 0 in upconP1 kodiert
  * (KNOWLEDGE 289: Werte <= 2.7e-35, block-/kanalabhaengig, PCM16-wirkungslos).
  */
-class FullChainChannel {
+class FullChainChannel(private val for44k: Boolean = false) {
+
+    // Ratenabhaengige Tabellen (einmalig aufgeloest, kein Branch im Block-Loop)
+    private val rodSA = if (for44k) FC44.ROD_SA else FC.ROD_SA
+    private val k65 = if (for44k) FC44.K65 else FC.K65
+    private val taps = if (for44k) FC44.TAPS else FC.TAPS
 
     private val hist = FloatArray(24)
     private val win = FloatArray(20)
@@ -59,7 +68,7 @@ class FullChainChannel {
         for (i in 0..19) inArr[88 + i] = win[i]
 
         // --- Stage A (schreibt fin[62..190)) ---
-        stageA(inArr, fin, s, FC.ROD_SA)
+        stageA(inArr, fin, s, rodSA)
         val saOut = sSaOut
         for (i in 0..127) saOut[i] = fin[62 + i]
 
@@ -86,10 +95,10 @@ class FullChainChannel {
         val st = { i: Int -> if (i < 20) win[i] else c82[i - 20] }
         for (j in 0..15) {
             val c = 10 + 4 * j
-            var acc = st(c) * FC.TAPS[0]
+            var acc = st(c) * taps[0]
             for (k in 1..10) {
                 val sk = st(c + k) + st(c - k)
-                acc = acc + sk * FC.TAPS[k]
+                acc = acc + sk * taps[k]
             }
             sDneu[j] = acc
         }
@@ -97,8 +106,8 @@ class FullChainChannel {
         for (i in 0..15) d[16 + i] = dneu[i]
 
         // --- Upcon Phase 0 + Phase 1 ---
-        upconP0(fin, d, s, stack, FC.K65, FC.ROD_P1)
-        upconP1(fin, d, s, stack, FC.K65, FC.ROD_P1)
+        upconP0(fin, d, s, stack, k65, FC.ROD_P1)
+        upconP1(fin, d, s, stack, k65, FC.ROD_P1)
         for (i in 0..127) out[i] = fin[i]
 
         // --- Carries (Caller-Sektion) ---

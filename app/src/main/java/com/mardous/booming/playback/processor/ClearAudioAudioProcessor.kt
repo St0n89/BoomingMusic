@@ -195,7 +195,7 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
             sim = DsxSimulator(DsxConfig(ch = channels, sr = sampleRate)).also {
                 simulator = it
                 simConfig = cfg
-                fullCh = Array(channels) { FullChainChannel() }
+                fullCh = Array(channels) { FullChainChannel(sampleRate == 44100) }
                 pending = null
                 pendingCount = 0
             }
@@ -224,13 +224,18 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
     }
 
     /**
-     * Ein 256er-Eingabeframe -> 512 Ausgangswerte je Kanal @2x Rate.
-     * 48 kHz + an: Full-Chain; 44.1 kHz + an: Phase-3e-Wet; aus: Site-1.
+     * Ein 256er-Eingabeframe -> 512 Ausgangswerte je Kanal @2x Rate
+     * (48 kHz UND 44.1 kHz, Tabellenwahl per FullChainChannel-Flag).
+     * An (44.1 und 48 kHz): Full-Chain (rate-spezifische Tabellen); aus:
+     * Site-1. Der Phase-3e-Wet-Pfad faellt damit weg (44.1-Luecke 293).
      * Das Ausgabeformat bleibt in allen Faellen 2x (siehe KDoc der Klasse).
      */
     private fun processFrame(sim: DsxSimulator, frame: Array<FloatArray>): Array<FloatArray> {
         return when {
-            enabled && sampleRate == 48000 -> processFrameFull(frame)
+            enabled && (sampleRate == 48000 || sampleRate == 44100) ->
+                // Beide Raten: bit-genauer Full-Chain-Port (48k: KNOWLEDGE
+                // 289/291; 44.1k: 293, K65/TAPS/SA-Taps aus FC44).
+                processFrameFull(frame)
             enabled -> {
                 // 44.1 kHz: Phase-3e-Architektur (Site-1-Upsampling + GUCF-Wet),
                 // 40/40 Harness-Checks, Image-Rejection ~47 dB.
@@ -263,7 +268,8 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
      * FIN-Rotation) sitzt in FullChainChannel und traegt ueber Frames fort.
      */
     private fun processFrameFull(frame: Array<FloatArray>): Array<FloatArray> {
-        val chans = fullCh ?: Array(frame.size) { FullChainChannel() }
+        val chans = fullCh
+            ?: Array(frame.size) { FullChainChannel(sampleRate == 44100) }
         val out = Array(frame.size) { FloatArray(2 * FRAME) }
         for (ch in frame.indices) {
             val chan = chans[ch]

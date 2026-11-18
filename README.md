@@ -149,15 +149,17 @@ are shipped, everything is our own code under GPL-3.
 
 - Toggle in *Settings → Sound*; the Equalizer screen shows the live status
   (active, bypassed or off, incl. the output rate).
-- **48 kHz input** runs the full decoded chain as a bit-exact Kotlin port:
-  Stage A (25-tap polyphase 2x FIR) → analysis (gain → DC-notch biquad in exact
-  firmware op order → symmetric D-FIR) → upconversion P0/P1, all IEEE f32 per
-  operation, output at 96 kHz. Accepted bitwise against a 16-block emulator
-  reference: FAIL=0, ok=4066/4096, all 30 residual slots below 2.7e-35
+- **44.1 kHz and 48 kHz input** both run the full decoded chain as a
+  bit-exact Kotlin port: Stage A (25-tap polyphase 2x FIR) → analysis (gain →
+  DC-notch biquad in exact firmware op order → symmetric D-FIR) →
+  upconversion P0/P1, all IEEE f32 per operation, output at 2x rate
+  (96/88.2 kHz). Only three table sets are rate-dependent (upcon FIR kernel
+  K65, analysis D-FIR taps, Stage A taps; the 44.1 kHz firmware pulls Stage A
+  taps from the neighbouring table at 0x163408). Each rate was accepted
+  bitwise against its own 16-block emulator reference with an identical
+  tally: FAIL=0, ok=4066/4096, all 30 residual slots below 2.7e-35
   (uninitialized driver scratch memory, modeled as constant zero, far below
   the 16-bit floor).
-- **44.1 kHz input** uses the measured phase-3e architecture (full-band 2x
-  site-1 upsampling + GUCF band), output at 88.2 kHz.
 - Any other rate/channel configuration bypasses untouched (zero cost when off).
 
 ## 🙌 Credits
