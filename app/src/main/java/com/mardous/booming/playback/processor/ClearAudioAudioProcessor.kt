@@ -169,7 +169,7 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
             val frame = Array(channels) { ch ->
                 FloatArray(FRAME) { if (it < pendingCount) pend[ch][it] else 0f }
             }
-            emitFrames(listOf(processFrame(frame)))
+            emitFrames(listOf(processFrame(simulator, frame)))
         }
         pending = null
         pendingCount = 0
