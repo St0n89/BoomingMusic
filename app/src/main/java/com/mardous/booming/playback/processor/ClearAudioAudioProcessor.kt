@@ -163,13 +163,14 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
     }
 
     override fun onQueueEndOfStream() {
+        val sim = simulator
         val pend = pending
-        if (pend != null && pendingCount > 0) {
+        if (sim != null && pend != null && pendingCount > 0) {
             // angebrochenen Frame mit Nullen auffuellen und verarbeiten (Firmware-Flush)
             val frame = Array(channels) { ch ->
                 FloatArray(FRAME) { if (it < pendingCount) pend[ch][it] else 0f }
             }
-            emitFrames(listOf(processFrame(simulator, frame)))
+            emitFrames(listOf(processFrame(sim, frame)))
         }
         pending = null
         pendingCount = 0
