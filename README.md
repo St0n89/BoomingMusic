@@ -30,6 +30,7 @@
 - [🤝 Contributing](#-contributing)
 - [💖 Support Development](#-support-development)
 - [🔗 Useful Links](#-useful-links)
+- [🎧 ClearAudio+ (this fork)](#-clearaudio-this-fork)
 - [🙌 Credits](#-credits)
 - [⚖️ License](#-license)
 
@@ -138,6 +139,26 @@ Your support is greatly appreciated and keeps me motivated to continue improving
 
 - ❓ **[FAQ](https://github.com/mardous/BoomingMusic/wiki/FAQ)**  
   Common questions
+
+## 🎧 ClearAudio+ (this fork)
+
+This fork adds **ClearAudio+ (DSEE AI)** as a switchable playback option. It is a
+clean-room re-derivation reverse-engineered from the Sony Walkman NW-A105 audio
+chain (`audio.primary.icx1293.so`, sections 0x129/0x12a/0x12c) — no Sony binaries
+are shipped, everything is our own code under GPL-3.
+
+- Toggle in *Settings → Sound*; the Equalizer screen shows the live status
+  (active, bypassed or off, incl. the output rate).
+- **48 kHz input** runs the full decoded chain as a bit-exact Kotlin port:
+  Stage A (25-tap polyphase 2x FIR) → analysis (gain → DC-notch biquad in exact
+  firmware op order → symmetric D-FIR) → upconversion P0/P1, all IEEE f32 per
+  operation, output at 96 kHz. Accepted bitwise against a 16-block emulator
+  reference: FAIL=0, ok=4066/4096, all 30 residual slots below 2.7e-35
+  (uninitialized driver scratch memory, modeled as constant zero, far below
+  the 16-bit floor).
+- **44.1 kHz input** uses the measured phase-3e architecture (full-band 2x
+  site-1 upsampling + GUCF band), output at 88.2 kHz.
+- Any other rate/channel configuration bypasses untouched (zero cost when off).
 
 ## 🙌 Credits
 

@@ -18,10 +18,10 @@ import kotlinx.coroutines.flow.StateFlow
  *
  * [enabled] = Master-Schalter-Stellung (Nutzer-Setting),
  * [activeInChain] = der Processor verarbeitet tatsächlich im Moment (Format
- * unterstützt: 48 kHz, 1-2 Kanäle, PCM16/Float). [sampleRate]/
+ * unterstützt: 44.1 oder 48 kHz, 1-2 Kanäle, PCM16/Float). [sampleRate]/
  * [channelCount] beschreiben das EINGANGS-Format, das der Processor zuletzt
  * gesehen hat (0 = noch kein Stream). Die Ausgabe läuft mit der doppelten
- * Rate (96 kHz), siehe [ClearAudioAudioProcessor].
+ * Rate (88.2/96 kHz), siehe [ClearAudioAudioProcessor].
  */
 data class ClearAudioStatus(
     val enabled: Boolean,
@@ -51,11 +51,14 @@ data class ClearAudioStatus(
  * + FIN-Rotationsrest) laeuft ueber Block- und Trackgrenzen weiter wie im
  * Original; onReset stellt den Kaltstart (alles 0) wieder her.
  *
- * Aktiv bei 48 kHz, 1-2 Kanäle, PCM16/Float (die Chain-Koeffizienten
- * K65/Taps/RODATA sind die gemessene 48-kHz-Konfiguration; 44.1 kHz
- * benoetigt erst eine eigene Emulator-Referenz). Alles andere wird
- * unangetastet durchgereicht (NOT_SET-Bypass, kein Werfen einer
- * UnhandledAudioFormatException, da die DefaultAudioSink daraus eine
+ * Aktiv bei 48 kHz und 44.1 kHz, 1-2 Kanäle, PCM16/Float:
+ *  - 48 kHz: volle Chain (Phase 3f, bit-exakt, oben beschrieben)
+ *  - 44.1 kHz: die in Phase 3e gemessene und validierte Architektur
+ *    (Site-1-Fullband-Upsampling + GUCF-Wet), bis eine eigene 44.1-kHz-
+ *    Full-Chain-Emulator-Referenz vorliegt (die Chain-Koeffizienten
+ *    K65/Taps/RODATA sind die gemessene 48-kHz-Konfiguration).
+ * Alles andere wird unangetastet durchgereicht (NOT_SET-Bypass, kein Werfen
+ * einer UnhandledAudioFormatException, da die DefaultAudioSink daraus eine
  * ConfigurationException macht, die die Wiedergabe komplett stoppt).
  *
  * Ist der Schalter beim Configure aus, gibt der Processor NOT_SET zurueck
@@ -111,9 +114,8 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
         val sr = inputAudioFormat.sampleRate
-        // Phase 3f: NUR 48 kHz (die Chain-Koeffizienten sind die 48-kHz-
-        // RODATA-Konfiguration; 44.1 kHz folgt erst mit eigener Referenz).
-        val ok = sr == 48000 &&
+        // Phase 3f.1: 48 kHz = Full-Chain; 44.1 kHz = Phase-3e-Wet-Architektur.
+        val ok = (sr == 48000 || sr == 44100) &&
             (inputAudioFormat.channelCount == 1 || inputAudioFormat.channelCount == 2) &&
             (inputAudioFormat.encoding == C.ENCODING_PCM_16BIT || inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT)
         if (!ok || !enabled) {
@@ -223,19 +225,35 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
 
     /**
      * Ein 256er-Eingabeframe -> 512 Ausgangswerte je Kanal @2x Rate.
-     * Einschalterstellung entscheidet ueber den Modus; das Ausgabeformat
-     * bleibt in beiden Faellen 2x (siehe KDoc der Klasse).
+     * 48 kHz + an: Full-Chain; 44.1 kHz + an: Phase-3e-Wet; aus: Site-1.
+     * Das Ausgabeformat bleibt in allen Faellen 2x (siehe KDoc der Klasse).
      */
     private fun processFrame(sim: DsxSimulator, frame: Array<FloatArray>): Array<FloatArray> {
-        return if (enabled) {
-            processFrameFull(frame)
-        } else {
-            // Mid-stream aus: bewaehrtes Site-1-Upsampling der Phase 3e
-            // (Firmware-Fenstertabelle, Image-Rejection ~47 dB).
-            val dbl = Array(frame.size) { ch -> DoubleArray(frame[ch].size) { frame[ch][it].toDouble() } }
-            sim.executeFrameUpsample2x(dbl).map { arr ->
-                FloatArray(arr.size) { arr[it].toFloat() }
-            }.toTypedArray()
+        return when {
+            enabled && sampleRate == 48000 -> processFrameFull(frame)
+            enabled -> {
+                // 44.1 kHz: Phase-3e-Architektur (Site-1-Upsampling + GUCF-Wet),
+                // 40/40 Harness-Checks, Image-Rejection ~47 dB.
+                val dbl = Array(frame.size) { ch ->
+                    DoubleArray(frame[ch].size) { frame[ch][it].toDouble() }
+                }
+                val (dry, wet) = sim.executeFrameDryWet(dbl)
+                Array(frame.size) { ch ->
+                    val d = dry[ch]
+                    val w = wet[ch]
+                    FloatArray(d.size) { i -> (d[i] + w[i]).toFloat() }
+                }
+            }
+            else -> {
+                // Mid-stream aus: bewaehrtes Site-1-Upsampling der Phase 3e
+                // (Firmware-Fenstertabelle, Image-Rejection ~47 dB).
+                val dbl = Array(frame.size) { ch ->
+                    DoubleArray(frame[ch].size) { frame[ch][it].toDouble() }
+                }
+                sim.executeFrameUpsample2x(dbl).map { arr ->
+                    FloatArray(arr.size) { arr[it].toFloat() }
+                }.toTypedArray()
+            }
         }
     }
 
