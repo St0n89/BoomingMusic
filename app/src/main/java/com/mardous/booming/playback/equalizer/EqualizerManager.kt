@@ -204,6 +204,12 @@ class EqualizerManager(
             .flowOn(Dispatchers.Main)
             .launchIn(eqScope)
 
+        soundSettings.map { it.clearAudioAntiClip }
+            .onEach { antiClip -> clearAudioProcessor.setAntiClip(antiClip) }
+            .catch { e -> Log.e(TAG, "clearAudioAntiClip collect failed", e) }
+            .flowOn(Dispatchers.Main)
+            .launchIn(eqScope)
+
         audioOutputObserver.audioDevice
             .onEach { setCurrentDevice(it) }
             .catch { e -> Log.e(TAG, "audioDevice collect failed", e) }
@@ -673,6 +679,12 @@ class EqualizerManager(
     suspend fun setEnableClearAudio(clearAudio: Boolean) {
         context.eqDataStore.edit { prefs ->
             prefs[Keys.CLEAR_AUDIO] = clearAudio
+        }
+    }
+
+    suspend fun setClearAudioAntiClip(antiClip: Boolean) {
+        context.eqDataStore.edit { prefs ->
+            prefs[Keys.CLEAR_AUDIO_ANTI_CLIP] = antiClip
         }
     }
 
@@ -1148,7 +1160,8 @@ class EqualizerManager(
             audioOffload = !clearAudio && prefs[Keys.BIT_PERFECT] != true && prefs[Keys.AUDIO_OFFLOAD] == true,
             audioFloatOutput = prefs[Keys.AUDIO_FLOAT_OUTPUT] ?: false,
             skipSilence = prefs[Keys.SKIP_SILENCE] ?: false,
-            clearAudio = clearAudio
+            clearAudio = clearAudio,
+            clearAudioAntiClip = prefs[Keys.CLEAR_AUDIO_ANTI_CLIP] ?: true
         )
     }
 
@@ -1192,6 +1205,7 @@ class EqualizerManager(
             val AUDIO_FLOAT_OUTPUT = booleanPreferencesKey("audio.float_output")
             val SKIP_SILENCE = booleanPreferencesKey("audio.skip_silence")
             val CLEAR_AUDIO = booleanPreferencesKey("audio.clear_audio")
+            val CLEAR_AUDIO_ANTI_CLIP = booleanPreferencesKey("audio.clear_audio.anti_clip")
             val REPLAYGAIN_MODE = stringPreferencesKey("replaygain.mode")
             val REPLAYGAIN_PREAMP = floatPreferencesKey("replaygain.preamp")
             val REPLAYGAIN_PREAMP_WITHOUT_GAIN = floatPreferencesKey("replaygain.preamp.without_gain")

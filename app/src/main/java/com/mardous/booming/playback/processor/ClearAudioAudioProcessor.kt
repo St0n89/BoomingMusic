@@ -10,6 +10,7 @@ import com.tarvos.clearaudio.DsxSimulator
 import com.tarvos.clearaudio.FullChainChannel
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.exp
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -108,10 +109,51 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
     private val fOut = FloatArray(2 * FULL_BLOCK)
 
     /** Master-Schalter (Settings/UI). Bei false mid-stream: Site-1-Upsampling. */
+    @Volatile
+    private var enabled = false
+
     @Synchronized
     fun setEnabled(value: Boolean) {
         enabled = value
         _status.value = _status.value.copy(enabled = value)
+    }
+
+    /**
+     * Anti-Clip-Schutz (KNOWLEDGE 297/298): die Original-Kette liefert bei
+     * 0-dBFS-gemastertem Material Spitzen bis +31 dB (Bode 14-18 kHz Faktor
+     * x35; The Prodigy/Master: 14 % aller Ausgangswerte ueber 1.0). Das
+     * Original faengt das erst im audioserver-Float-Pfad ueber die Volume-
+     * Skalierung ab (IepTypes::VolumeConfig/followToMasterVolume); als
+     * Player-Stufe VOR der PCM16-Konvertierung brauchen wir eine feste
+     * Absenkung (-9 dB) plus saturierendes Softknee ab 0.9 auf exakt 1.0.
+     * Gemessen am Referenztrack: Clippingquote 14.4 % -> 0.006 %, RMS-Verlust
+     * gegenueber Bypass nur ca. 1.6 dB.
+     */
+    @Volatile
+    private var antiClip = true
+
+    @Synchronized
+    fun setAntiClip(value: Boolean) {
+        antiClip = value
+    }
+
+    /**
+     * -9 dB Vorabsenkung, dann saturierendes Knie: Werte ueber 0.9 werden
+     * exponentiell gegen 1.0 gestaucht (1 - exp(-excess/0.08)), exakt die
+     * im C++-Referenzmes Driver getestete Kurve. Unter 0.9 ist die Kurve
+     * identisch mit der Originalkette (nur eben -9 dB).
+     */
+    private fun applyAntiClip(v: Float): Float {
+        val x = v * ANTI_CLIP_SCALE
+        if (x > ANTI_CLIP_KNEE) {
+            val ex = x - ANTI_CLIP_KNEE
+            return ANTI_CLIP_KNEE + (1f - ANTI_CLIP_KNEE) * (1f - exp(-ex * 12.5f))
+        }
+        if (x < -ANTI_CLIP_KNEE) {
+            val ex = -x - ANTI_CLIP_KNEE
+            return -(ANTI_CLIP_KNEE + (1f - ANTI_CLIP_KNEE) * (1f - exp(-ex * 12.5f)))
+        }
+        return x
     }
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
@@ -308,7 +350,10 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
         for (block in outBlocks) {
             for (s in 0 until frameLen) {
                 for (ch in 0 until channels) {
-                    val v = block[ch][s]
+                    // Anti-Clip nur im aktiven ClearAudio-Modus: die Site-1-
+                    // Upsampling-Pfade (enabled=false bzw. Bypass) brauchen
+                    // keine Absenkung, dort bleibt der Pegel 1:1.
+                    val v = if (enabled && antiClip) applyAntiClip(block[ch][s]) else block[ch][s]
                     if (floatIn) {
                         buffer.putInt(v.toBits())
                     } else {
@@ -325,5 +370,10 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
     companion object {
         const val FRAME = 256
         const val FULL_BLOCK = 64
+
+        /** Anti-Clip: -9 dB Vorabsenkung (10^(-9/20)), Knie ab 0.9, 
+         *  Sattdaempfung 1-exp(-excess*12.5), Asymptote exakt 1.0. */
+        const val ANTI_CLIP_SCALE = 0.35481338f
+        const val ANTI_CLIP_KNEE = 0.9f
     }
 }
