@@ -1,0 +1,6 @@
+id=clearaudiofx
+name=ClearAudioFX systemweit
+version=v1.0
+versionCode=1
+author=Dennis Kunde / tarvos
+description=Systemweiter ClearAudio+/DSEE-artiger Effekt als audioserver-AudioEffect (RE-Port der Sony-Full-Chain, 44,1 + 48 kHz bit-exakt validiert). Schalter: Quick-Settings-Tile (persist.clearaudio.enabled). Effekt wirkt erst nach Reboot; Standard ist AUS.

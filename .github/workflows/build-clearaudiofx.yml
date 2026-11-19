@@ -1,0 +1,107 @@
+name: ClearAudioFX standalone (systemweit)
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'standalone/clearaudiofx/**'
+      - '.github/workflows/build-clearaudiofx.yml'
+  workflow_dispatch:
+
+jobs:
+  module:
+    name: Engine-Abnahme + libclearaudiofx.so + Magisk-Modul
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Android NDK r27c
+        run: |
+          curl -sL -o ndk.zip https://dl.google.com/android/repository/android-ndk-r27c-linux.zip
+          unzip -q ndk.zip
+          echo "$PWD/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
+
+      - name: Engine-Abnahme (bit-exakt, FAIL>0 = Job failed)
+        working-directory: standalone/clearaudiofx/engine
+        run: |
+          clang++ -std=c++17 -O2 -ffp-contract=off -fno-fast-math \
+            -o engine_test engine_test.cpp clear_chain.cpp engine_gen.cpp \
+            fc_tables.cpp fixtures.cpp
+          ./engine_test
+
+      - name: Effect-Smoke (nativ, create/config/enable/process/release)
+        working-directory: standalone/clearaudiofx
+        run: |
+          clang++ -std=c++17 -O2 -ffp-contract=off -fno-fast-math \
+            -Ieffect/include \
+            -o effect_smoke effect/effect_smoke.cpp effect/clearaudio_fx.cpp \
+            engine/clear_chain.cpp engine/engine_gen.cpp engine/fc_tables.cpp
+          ./effect_smoke
+
+      - name: libclearaudiofx.so (aarch64, API 21)
+        working-directory: standalone/clearaudiofx
+        run: |
+          clang++ --target=aarch64-linux-android21 -shared -fPIC -O2 \
+            -ffp-contract=off -fno-fast-math -Ieffect/include \
+            -o dist_libclearaudiofx.so effect/clearaudio_fx.cpp \
+            engine/clear_chain.cpp engine/engine_gen.cpp engine/fc_tables.cpp \
+            -static-libstdc++
+
+      - name: Magisk-Modul-Zip
+        working-directory: standalone/clearaudiofx
+        run: |
+          mkdir -p dist
+          rm -rf dist/module && mkdir -p dist/module
+          cp magisk/module.prop magisk/customize.sh magisk/README.md dist/module/
+          cp dist_libclearaudiofx.so dist/module/libclearaudiofx.so
+          (cd dist/module && zip -r -X ../ClearAudioFX-magisk-v1.0.zip .)
+          unzip -l dist/ClearAudioFX-magisk-v1.0.zip
+
+      - name: Artefakt hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: clearaudiofx-magisk-module
+          path: |
+            standalone/clearaudiofx/dist/ClearAudioFX-magisk-v1.0.zip
+          if-no-files-found: error
+
+  tile-apk:
+    name: Tile-APK (ClearAudioTile)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: SDK-Pakete (platform 35)
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools" > /dev/null
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: APK bauen (debug-signed)
+        working-directory: standalone/clearaudiofx/tileapp
+        run: gradle --no-daemon assembleDebug
+
+      - name: APK-Pruefung
+        working-directory: standalone/clearaudiofx/tileapp
+        run: |
+          ls -la app/build/outputs/apk/debug/
+          ${ANDROID_HOME}/build-tools/35.0.0/aapt dump badging \
+            app/build/outputs/apk/debug/app-debug.apk | head -5
+
+      - name: Artefakt hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: clearaudiofx-tile-apk
+          path: |
+            standalone/clearaudiofx/tileapp/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

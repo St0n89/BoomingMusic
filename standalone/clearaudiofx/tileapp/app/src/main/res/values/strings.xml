@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ClearAudio+</string>
+    <string name="tile_label">ClearAudio+</string>
+    <string name="status_fmt">Systemweiter Effekt: %s</string>
+    <string name="status_on">AKTIV</string>
+    <string name="status_off">AUS</string>
+    <string name="status_unavailable">NICHT VERFÜGBAR (kein su)</string>
+    <string name="btn_toggle">Ein-/Ausschalten (setprop via su)</string>
+    <string name="hint">Benötigt das ClearAudioFX-Magisk-Modul (libclearaudiofx.so in audioserver) und Magisk-su für den Schalter. Umschalten via Quick-Settings-Kachel oder Knopf hier. Änderung greift sofort (Effekt pollt die Property, ~40 ms).\n\n Technische Basis: RE der Sony-Firmware (Full-Chain, 44,1 + 48 kHz bit-exakt validiert); im Systemweg läuft die Kette intern mit 2x und dezimiert zurück (Session-0-Effekte dürfen die Rate nicht ändern), das ist bewusst nicht das Walkman-2x-Ausgabeverhalten.</string>
+</resources>
