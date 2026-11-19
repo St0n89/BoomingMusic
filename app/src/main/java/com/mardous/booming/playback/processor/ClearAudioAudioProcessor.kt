@@ -390,10 +390,22 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
             // (Execute-Wrapper 128er-Calls = 2x64 Subchunks, KNOWLEDGE
             // 303). Abnahme: 3584/3584 Samples bit-identisch zur
             // Emulator-Referenz.
+            //
+            // Eq10-Transparent-Modus (KNOWLEDGE 305): Der Kernel hard-
+            // clippt intern bei +-1.0. Der 2x-Ausgang der Dsx-Kette ist
+            // Pegel-gemaess 20-30 dB heisser (Peak 10.2 im 10-s-Mess-
+            // fenster, 35.7 ueber den ganzen Track); unskaliert flacht
+            // der Eq10-Hardclip ca. 8% aller Samples vollstaendig ab =
+            // die "schnarrenden Hoehen". Pre-Scale 2^-7 + Post-Scale 2^7
+            // sind exakte Zweierpotenzen (f32 ohne Rundungsfehler); Eq10
+            // ist bis auf den Schluss-Hardclip linear, d.h. mit Skalierung
+            // liefert diese Stelle exakt Eq10OhneClip(x).
             val eq = eqs[ch]
+            for (i in 0 until 2 * FRAME) out[ch][i] = out[ch][i] * EQ10_IN_SCALE
             for (off in 0 until 2 * FRAME step Eq10Channel.BLOCK) {
                 eq.processBlock64(out[ch], off)
             }
+            for (i in 0 until 2 * FRAME) out[ch][i] = out[ch][i] * EQ10_OUT_GAIN
         }
         return out
     }
@@ -448,5 +460,11 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
         const val ANTI_CLIP_KNEE = 0.9f
         const val ANTI_CLIP_T = 0.028183829f
         const val ANTI_CURVE = 12.5f
+
+        /** Eq10-Transparent-Modus: Eingang 2^-7 / Ausgang 2^7 um den
+         *  internen +-1.0-Hardclip des Kernels (KNOWLEDGE 305) zu
+         *  umgehen; exakte Zweierpotenzen, f32-verlustfrei. */
+        const val EQ10_IN_SCALE = 1f / 128f
+        const val EQ10_OUT_GAIN = 128f
     }
 }
