@@ -453,12 +453,17 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
         const val FRAME = 256
         const val FULL_BLOCK = 64
 
-        /** Anti-Clip v2: -9 dB Vorabsenkung (10^(-9/20)), Split @9 kHz,
-         *  adaptiver HF-Gain gegen den Env-Deckel T = -31 dBFS (10^(-31/20),
-         *  Attack 10 ms / Release 150 ms), Knie ab 0.9, Asymptote exakt 1.0. */
-        const val ANTI_CLIP_SCALE = 0.35481338f
+        /** Anti-Clip v3 (KNOWLEDGE 306): KEINE Vorabsenkung mehr (Dennis:
+         *  Lautheit wie Bypass), dafuer HF-Deckel hochgezogen von -31 auf
+         *  -22 dBFS (T mit S im selben Verhaeltnis, Timbre wie v2) und Peak-Fang
+         *  ueber die weiche Exponential-Knee-Kurve (ab 0.9, Asymptote
+         *  exakt 1.0). Messung Prodigy Sek. 15-25: knee 2.3/4.1 % aktiv,
+         *  rms +8.7 dB gegen v2. Fallback falls Peaks pumpen:
+         *  SCALE 0.568f / T 0.04509f = bypass-niveaugleiche Variante
+         *  (knee 0.2 %, KNOWLEDGE 306-(3)). */
+        const val ANTI_CLIP_SCALE = 1f
         const val ANTI_CLIP_KNEE = 0.9f
-        const val ANTI_CLIP_T = 0.028183829f
+        const val ANTI_CLIP_T = 0.07943282f
         const val ANTI_CURVE = 12.5f
 
         /** Eq10-Transparent-Modus: Eingang 2^-7 / Ausgang 2^7 um den
