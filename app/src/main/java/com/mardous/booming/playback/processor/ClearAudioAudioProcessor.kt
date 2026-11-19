@@ -7,6 +7,8 @@ import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.util.UnstableApi
 import com.tarvos.clearaudio.DsxConfig
 import com.tarvos.clearaudio.DsxSimulator
+import com.tarvos.clearaudio.Eq10Channel
+import com.tarvos.clearaudio.Eq10Tables
 import com.tarvos.clearaudio.FullChainChannel
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -104,6 +106,7 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
     private var simulator: DsxSimulator? = null          // Site-1-Pfad (mid-stream off)
     private var simConfig: Config? = null
     private var fullCh: Array<FullChainChannel>? = null    // Full-Chain-Pfad (on)
+    private var eqCh: Array<Eq10Channel>? = null            // Eq10 UNIQUE je Kanal (on)
     private var pending: Array<FloatArray>? = null         // je Kanal bis 255 Samples (f32)
     private var pendingCount = 0
 
@@ -213,6 +216,7 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
                 simulator = null
                 simConfig = null
                 fullCh = null
+                eqCh = null
                 pending = null
                 pendingCount = 0
                 releaseAntiClipState()
@@ -254,6 +258,7 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
         simulator = null
         simConfig = null
         fullCh = null
+        eqCh = null
         pending = null
         pendingCount = 0
         releaseAntiClipState()
@@ -291,6 +296,7 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
                 simulator = it
                 simConfig = cfg
                 fullCh = Array(channels) { FullChainChannel(sampleRate == 44100) }
+                eqCh = Array(channels) { Eq10Channel(eq10Coeffs()) }
                 pending = null
                 pendingCount = 0
             }
@@ -361,10 +367,14 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
      * Full-Chain-Pfad: je Kanal 4x 64er-Bloecke durch die Kette, Ausgabe
      * 4x128 = 512 Werte @2x. Der Kanal-State (hist/win/or notch u,v/D/
      * FIN-Rotation) sitzt in FullChainChannel und traegt ueber Frames fort.
+     * Danach Eq10 UNIQUE (KNOWLEDGE 303): 8x 64er-Bloecke des 2x-Ausgangs,
+     * Biquad-Zustaende fortlaufend (Original: Dsx -> Eq10 -> [Heq] -> Vpt).
      */
     private fun processFrameFull(frame: Array<FloatArray>): Array<FloatArray> {
         val chans = fullCh
             ?: Array(frame.size) { FullChainChannel(sampleRate == 44100) }
+        val eqs = eqCh
+            ?: Array(frame.size) { Eq10Channel(eq10Coeffs()) }
         val out = Array(frame.size) { FloatArray(2 * FRAME) }
         for (ch in frame.indices) {
             val chan = chans[ch]
@@ -375,9 +385,22 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
                 chan.processBlock(fFresh, fOut)
                 for (i in 0 until 2 * FULL_BLOCK) out[ch][o++] = fOut[i]
             }
+            // Phase 3l-B: Eq10 UNIQUE hinter der Dsx-Kette auf dem 2x-
+            // Ausgang (96/88.2 kHz), 64er-Raster wie die Firmware
+            // (Execute-Wrapper 128er-Calls = 2x64 Subchunks, KNOWLEDGE
+            // 303). Abnahme: 3584/3584 Samples bit-identisch zur
+            // Emulator-Referenz.
+            val eq = eqs[ch]
+            for (off in 0 until 2 * FRAME step Eq10Channel.BLOCK) {
+                eq.processBlock64(out[ch], off)
+            }
         }
         return out
     }
+
+    /** Eq10-Koeffizienten der Ausgabeabtastrate (2x sr -> Mode 3 bei 48 kHz, Mode 2 bei 44.1 kHz). */
+    private fun eq10Coeffs(): Array<FloatArray> =
+        if (sampleRate == 44100) Eq10Tables.COEFFS_882 else Eq10Tables.COEFFS_96K
 
     /**
      * Schreibt alle Bloecke eines queueInput-Aufrufs in EINEN Output-Buffer
