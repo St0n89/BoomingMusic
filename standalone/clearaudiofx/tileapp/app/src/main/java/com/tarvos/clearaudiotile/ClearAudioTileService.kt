@@ -37,8 +37,8 @@ class ClearAudioTileService : TileService() {
         val tile = qsTile ?: return
         when {
             !Su.suAvailable() -> tile.state = Tile.STATE_UNAVAILABLE
-            Su.prop() == "1" -> tile.state = Tile.STATE_ON
-            else -> tile.state = Tile.STATE_OFF
+            Su.prop() == "1" -> tile.state = Tile.STATE_ACTIVE
+            else -> tile.state = Tile.STATE_INACTIVE
         }
         tile.updateTile()
     }
