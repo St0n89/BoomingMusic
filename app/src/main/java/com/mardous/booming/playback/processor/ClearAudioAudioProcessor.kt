@@ -10,7 +10,10 @@ import com.tarvos.clearaudio.DsxSimulator
 import com.tarvos.clearaudio.FullChainChannel
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.abs
 import kotlin.math.exp
+import kotlin.math.max
+import kotlin.math.min
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -116,41 +119,82 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
     }
 
     /**
-     * Anti-Clip-Schutz (KNOWLEDGE 297/298): die Original-Kette liefert bei
-     * 0-dBFS-gemastertem Material Spitzen bis +31 dB (Bode 14-18 kHz Faktor
-     * x35; The Prodigy/Master: 14 % aller Ausgangswerte ueber 1.0). Das
-     * Original faengt das erst im audioserver-Float-Pfad ueber die Volume-
-     * Skalierung ab (IepTypes::VolumeConfig/followToMasterVolume); als
-     * Player-Stufe VOR der PCM16-Konvertierung brauchen wir eine feste
-     * Absenkung (-9 dB) plus saturierendes Softknee ab 0.9 auf exakt 1.0.
-     * Gemessen am Referenztrack: Clippingquote 14.4 % -> 0.006 %, RMS-Verlust
-     * gegenueber Bypass nur ca. 1.6 dB.
+     * Anti-Clip-Schutz v2 (KNOWLEDGE 297-299): die Original-Kette liefert bei
+     * HF-reichem Material Spitzen bis +31 dB (Bode 14-18 kHz Faktor x35), der
+     * Chain-HF-Synthese-Pegel liegt bis +22 dB ueber dem Bypass. Die v1-
+     * Variante (-9 dB + Softknee auf alles) stauchte aber messbar (err
+     * 3.1 %, hörbares Knistern bei Becken/Hi-Hats, KNOWLEDGE 299). v2
+     * zaehmt deshalb NUR den HF-Anteil adaptiv statt alles zusammen:
+     *
+     *   x = v * -9 dB
+     *   Split @ 9 kHz (LP 1. Ordnung, Ausgrate 2x sr)
+     *   hf-Env = Peak-Detektor (Attack 10 ms, Release 150 ms) auf den
+     *            HF-Anteil; g = min(1, T/env) mit T = -31 dBFS
+     *   y = Softknee(lp + g*hf), Knie 0.9, Asymptote 1.0
+     *
+     * Damit greift das Knie praktisch nie (Referenzmessung am Prodigy-
+     * Track: sat-Wirkzeit 0.01 %, Clipping 0.00 %), und die leisen Passagen
+     * behalten den vollen HF-Boost. Referenz hfRMS -25.8 dBFS zwischen den
+     * Dennis genehmen Varianten 05/06 (-25.0) und der sauberen -18-dB-
+     * Referenz (-27.9).
      */
     @Volatile
     private var antiClip = true
+
+    /** v2-State je Kanal: LP-Split und HF-Envelope (0 = noch nicht konfiguriert). */
+    private var acLp = FloatArray(0)
+    private var acEnv = FloatArray(0)
+
+    /** v2-Koeffizienten (von der Ausgabeabtastrate 2x sr abhaengig, in onConfigure). */
+    private var acLpA = 0f
+    private var acAtt = 0f
+    private var acRel = 0f
 
     @Synchronized
     fun setAntiClip(value: Boolean) {
         antiClip = value
     }
 
+    /** State/Koeffizienten fuer ein neues Ausgabeformat (Ausgrate 2*sr, [nch] Kanäle). */
+    private fun initAntiClipState(outRate: Int, nch: Int) {
+        acLp = FloatArray(nch)
+        acEnv = FloatArray(nch)
+        acLpA = (1.0 - exp(-2.0 * Math.PI * 9000.0 / outRate)).toFloat()
+        acAtt = exp(-1.0 / (0.010 * outRate)).toFloat()
+        acRel = exp(-1.0 / (0.150 * outRate)).toFloat()
+    }
+
+    private fun releaseAntiClipState() {
+        acLp = FloatArray(0)
+        acEnv = FloatArray(0)
+    }
+
     /**
-     * -9 dB Vorabsenkung, dann saturierendes Knie: Werte ueber 0.9 werden
-     * exponentiell gegen 1.0 gestaucht (1 - exp(-excess/0.08)), exakt die
-     * im C++-Referenzmes Driver getestete Kurve. Unter 0.9 ist die Kurve
-     * identisch mit der Originalkette (nur eben -9 dB).
+     * Anti-Clip v2 je Sample (siehe [antiClip]): -9 dB, Split @9 kHz,
+     * adaptiver HF-Gain gegen den Env-Deckel T=-31 dBFS, dann das
+     * vertraute saturierende Knie (unter 0.9 identisch mit der Chain).
      */
-    private fun applyAntiClip(v: Float): Float {
+    private fun applyAntiClip(ch: Int, v: Float): Float {
         val x = v * ANTI_CLIP_SCALE
-        if (x > ANTI_CLIP_KNEE) {
-            val ex = x - ANTI_CLIP_KNEE
-            return ANTI_CLIP_KNEE + (1f - ANTI_CLIP_KNEE) * (1f - exp(-ex * 12.5f))
+        val lpS = acLp[ch]
+        val lp = lpS + acLpA * (x - lpS)
+        acLp[ch] = lp
+        val hf = x - lp
+        val a = abs(hf)
+        val e = acEnv[ch]
+        val env = if (a > e) acAtt * e + (1f - acAtt) * a else acRel * e + (1f - acRel) * a
+        acEnv[ch] = env
+        val g = min(1f, ANTI_CLIP_T / max(1e-9f, env))
+        val y = lp + g * hf
+        if (y > ANTI_CLIP_KNEE) {
+            val ex = y - ANTI_CLIP_KNEE
+            return ANTI_CLIP_KNEE + (1f - ANTI_CLIP_KNEE) * (1f - exp(-ex * ANTI_CURVE))
         }
-        if (x < -ANTI_CLIP_KNEE) {
-            val ex = -x - ANTI_CLIP_KNEE
-            return -(ANTI_CLIP_KNEE + (1f - ANTI_CLIP_KNEE) * (1f - exp(-ex * 12.5f)))
+        if (y < -ANTI_CLIP_KNEE) {
+            val ex = -y - ANTI_CLIP_KNEE
+            return -(ANTI_CLIP_KNEE + (1f - ANTI_CLIP_KNEE) * (1f - exp(-ex * ANTI_CURVE)))
         }
-        return x
+        return y
     }
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
@@ -171,6 +215,7 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
                 fullCh = null
                 pending = null
                 pendingCount = 0
+                releaseAntiClipState()
             }
             // Diagnose: auch im Bypass das GESEHENE Format melden (der
             // Status kennt kHz/Kanaele/Encoding, damit die UI sagen kann,
@@ -186,6 +231,7 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
         sampleRate = sr
         channels = inputAudioFormat.channelCount
         floatIn = inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT
+        initAntiClipState(2 * sr, channels)
         _status.value = _status.value.copy(
             activeInChain = true, sampleRate = sr, channelCount = channels,
             encoding = inputAudioFormat.encoding
@@ -210,6 +256,7 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
         fullCh = null
         pending = null
         pendingCount = 0
+        releaseAntiClipState()
     }
 
     override fun onQueueEndOfStream() {
@@ -340,6 +387,9 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
      */
     private fun emitFrames(outBlocks: List<Array<FloatArray>>) {
         if (outBlocks.isEmpty()) return
+        // Mid-stream-Einschalten: State lazy nachziehen (onConfigure lief im
+        // Bypass nicht durch den aktiven Zweig).
+        if (enabled && antiClip && acLp.size < channels) initAntiClipState(2 * sampleRate, channels)
         val frameLen = outBlocks[0][0].size
         val total = outBlocks.sumOf { it[0].size }
         val buffer = replaceOutputBuffer(total * channels * (if (floatIn) 4 else 2))
@@ -350,7 +400,7 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
                     // Anti-Clip nur im aktiven ClearAudio-Modus: die Site-1-
                     // Upsampling-Pfade (enabled=false bzw. Bypass) brauchen
                     // keine Absenkung, dort bleibt der Pegel 1:1.
-                    val v = if (enabled && antiClip) applyAntiClip(block[ch][s]) else block[ch][s]
+                    val v = if (enabled && antiClip) applyAntiClip(ch, block[ch][s]) else block[ch][s]
                     if (floatIn) {
                         buffer.putInt(v.toBits())
                     } else {
@@ -368,9 +418,12 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
         const val FRAME = 256
         const val FULL_BLOCK = 64
 
-        /** Anti-Clip: -9 dB Vorabsenkung (10^(-9/20)), Knie ab 0.9, 
-         *  Sattdaempfung 1-exp(-excess*12.5), Asymptote exakt 1.0. */
+        /** Anti-Clip v2: -9 dB Vorabsenkung (10^(-9/20)), Split @9 kHz,
+         *  adaptiver HF-Gain gegen den Env-Deckel T = -31 dBFS (10^(-31/20),
+         *  Attack 10 ms / Release 150 ms), Knie ab 0.9, Asymptote exakt 1.0. */
         const val ANTI_CLIP_SCALE = 0.35481338f
         const val ANTI_CLIP_KNEE = 0.9f
+        const val ANTI_CLIP_T = 0.028183829f
+        const val ANTI_CURVE = 12.5f
     }
 }
