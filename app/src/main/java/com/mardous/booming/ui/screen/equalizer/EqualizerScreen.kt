@@ -9,6 +9,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts.CreateDocument
 import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
 import androidx.annotation.StringRes
+import androidx.media3.common.C
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -197,7 +198,12 @@ fun EqualizerScreen(
         clearAudioStatus.enabled && clearAudioStatus.activeInChain ->
             stringResource(R.string.clear_audio_status_active, clearAudioStatus.sampleRate * 2)
         clearAudioStatus.enabled ->
-            stringResource(R.string.clear_audio_status_bypassed)
+            stringResource(
+                R.string.clear_audio_status_bypassed,
+                clearAudioStatus.sampleRate / 1000f,
+                clearAudioStatus.channelCount,
+                clearAudioEncodingLabel(clearAudioStatus.encoding)
+            )
         else -> stringResource(R.string.clear_audio_mode_hint)
     }
 
@@ -1934,4 +1940,19 @@ private fun SyncProgressIndicator(
             )
         }
     }
+}
+
+/**
+ * Klartext-Label fuer das Input-Encoding (C.ENCODING_*), fuer die
+ * Bypass-Diagnose im ClearAudio+-Subtitle. Technische Begriffe,
+ * bewusst nicht uebersetzt.
+ */
+private fun clearAudioEncodingLabel(encoding: Int): String = when (encoding) {
+    C.ENCODING_PCM_16BIT -> "16-bit PCM"
+    C.ENCODING_PCM_FLOAT -> "Float PCM"
+    C.ENCODING_PCM_24BIT -> "24-bit PCM"
+    C.ENCODING_PCM_32BIT -> "32-bit PCM"
+    C.ENCODING_PCM_8BIT -> "8-bit PCM"
+    C.ENCODING_INVALID -> "unknown"
+    else -> "0x%08x".format(encoding)
 }

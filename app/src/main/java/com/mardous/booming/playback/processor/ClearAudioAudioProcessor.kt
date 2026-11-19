@@ -27,7 +27,9 @@ data class ClearAudioStatus(
     val enabled: Boolean,
     val activeInChain: Boolean,
     val sampleRate: Int,
-    val channelCount: Int
+    val channelCount: Int,
+    /** Input-Encoding des zuletzt gesehenen Streams (C.ENCODING_*), Diagnose. */
+    val encoding: Int = C.ENCODING_INVALID
 )
 
 /**
@@ -131,17 +133,24 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
                 pending = null
                 pendingCount = 0
             }
+            // Diagnose: auch im Bypass das GESEHENE Format melden (der
+            // Status kennt kHz/Kanaele/Encoding, damit die UI sagen kann,
+            // WARUM gebypasst wird). Interne Member bleiben bei !ok null.
             _status.value = _status.value.copy(
                 activeInChain = false,
-                sampleRate = if (ok) sr else 0,
-                channelCount = if (ok) inputAudioFormat.channelCount else 0
+                sampleRate = sr,
+                channelCount = inputAudioFormat.channelCount,
+                encoding = inputAudioFormat.encoding
             )
             return AudioProcessor.AudioFormat.NOT_SET
         }
         sampleRate = sr
         channels = inputAudioFormat.channelCount
         floatIn = inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT
-        _status.value = _status.value.copy(activeInChain = true, sampleRate = sr, channelCount = channels)
+        _status.value = _status.value.copy(
+            activeInChain = true, sampleRate = sr, channelCount = channels,
+            encoding = inputAudioFormat.encoding
+        )
         // Full-Chain: je 64er-Eingabeblock 128 Ausgangswerte @2x Rate.
         // Ausgabeformat = doppelte Rate, Kanalzahl/Encoding unveraendert.
         return AudioProcessor.AudioFormat(

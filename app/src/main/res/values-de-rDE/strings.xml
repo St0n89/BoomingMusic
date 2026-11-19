@@ -438,7 +438,7 @@
     <string name="clear_audio_is_active">ClearAudio+ ist aktiv</string>
     <string name="clear_audio_mode_hint">Master-Modus: umgeht Equalizer und ReplayGain</string>
     <string name="clear_audio_status_active">Aktiv: DSEE-Upconversion, Ausgabe mit %1$d Hz</string>
-    <string name="clear_audio_status_bypassed">Aktiviert, aber Format wird umgangen (Bypass). Spielt unbeeinflusst ab.</string>
+    <string name="clear_audio_status_bypassed">Aktiviert, aber Format (%1$.1f kHz, %2$d Kanäle, %3$s) wird umgangen (Bypass). Spielt unbeeinflusst ab.</string>
     <!-- Lyrics viewer -->
     <string name="action_show_lyrics">Liedtext anzeigen</string>
     <string name="action_hide_lyrics">Liedtext ausblenden</string>
