@@ -536,7 +536,6 @@ fun SoundSettingsSheet(
 
                         LabeledSwitch(
                             checked = soundSettings.clearAudioAntiClip,
-                            enabled = clearAudio,
                             title = stringResource(R.string.clear_audio_anti_clip_title),
                             description = stringResource(R.string.clear_audio_anti_clip_description)
                         ) { checked ->

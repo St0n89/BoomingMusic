@@ -667,7 +667,6 @@ fun EqualizerScreen(
                         title = stringResource(R.string.clear_audio_anti_clip_title),
                         subtitle = stringResource(R.string.clear_audio_anti_clip_description),
                         isChecked = soundSettings.clearAudioAntiClip,
-                        enabled = soundSettings.clearAudio,
                         onClick = { eqViewModel.setClearAudioAntiClip(soundSettings.clearAudioAntiClip.not()) }
                     )
                 }

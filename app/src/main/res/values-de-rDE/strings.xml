@@ -437,7 +437,7 @@
     <string name="enable_clear_audio_description">Voller ClearAudio+-Modus: rekonstruiert hohe Frequenzen mit einer Software-Nachbildung von Sonys DSEE AI. Solange aktiv, werden Equalizer und ReplayGain umgangen, wie bei einem Sony Walkman. 44,1-kHz- und 48-kHz-Quellen.</string>
     <string name="clear_audio_is_active">ClearAudio+ ist aktiv</string>
     <string name="clear_audio_anti_clip_title">Übersteuerungsschutz</string>
-    <string name="clear_audio_anti_clip_description">Senkt die Ausgabe der ClearAudio+-Kette um 9 dB und zähmt adaptiv nur die synthetisierten hohen Frequenzen (9-kHz-Weiche, Peak-Limiter bei -31 dBFS), damit das weiche Spitzenknie kaum noch eingreift. Die Originalkette liefert Spitzen bis +31 dB, die beim Clipping auf 16-Bit-PCM hörbar knistern würden. Aus bedeutet: unveränderte Originalkette.</string>
+    <string name="clear_audio_anti_clip_description">Fängt Pegelspitzen der ClearAudio+-Kette weich ab (9-kHz-Weiche, adaptiver HF-Deckel bei -22 dBFS, sanftes Knie), ohne die Lautheit abzusenken. Die Originalkette liefert Spitzen bis +31 dB über Vollpegel; ungefangen würden sie beim 16-Bit-PCM-Clipping hörbar knistern. Aus bedeutet: unveränderte Originalkette.</string>
     <string name="clear_audio_mode_hint">Master-Modus: umgeht Equalizer und ReplayGain</string>
     <string name="clear_audio_status_active">Aktiv: DSEE-Upconversion, Ausgabe mit %1$d Hz</string>
     <string name="clear_audio_status_bypassed">Aktiviert, aber Format (%1$.1f kHz, %2$d Kanäle, %3$s) wird umgangen (Bypass). Spielt unbeeinflusst ab.</string>
