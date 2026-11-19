@@ -109,9 +109,6 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
     private val fOut = FloatArray(2 * FULL_BLOCK)
 
     /** Master-Schalter (Settings/UI). Bei false mid-stream: Site-1-Upsampling. */
-    @Volatile
-    private var enabled = false
-
     @Synchronized
     fun setEnabled(value: Boolean) {
         enabled = value
