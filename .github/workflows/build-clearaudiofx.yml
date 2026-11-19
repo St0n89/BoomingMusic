@@ -76,12 +76,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
-
-      - name: SDK-Pakete (platform 35)
+      - name: SDK-Pakete (platform 35, vorinstallierter SDK-Manager)
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools" > /dev/null
+          SDKM=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
+          yes | $SDKM --licenses > /dev/null || true
+          $SDKM "platforms;android-35" "build-tools;35.0.0" "platform-tools" > /dev/null
+          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
 
       - uses: gradle/actions/setup-gradle@v4
         with:
