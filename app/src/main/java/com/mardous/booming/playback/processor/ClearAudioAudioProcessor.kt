@@ -453,17 +453,17 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
         const val FRAME = 256
         const val FULL_BLOCK = 64
 
-        /** Anti-Clip v3 (KNOWLEDGE 306): KEINE Vorabsenkung mehr (Dennis:
-         *  Lautheit wie Bypass), dafuer HF-Deckel hochgezogen von -31 auf
-         *  -22 dBFS (T mit S im selben Verhaeltnis, Timbre wie v2) und Peak-Fang
-         *  ueber die weiche Exponential-Knee-Kurve (ab 0.9, Asymptote
-         *  exakt 1.0). Messung Prodigy Sek. 15-25: knee 2.3/4.1 % aktiv,
-         *  rms +8.7 dB gegen v2. Fallback falls Peaks pumpen:
-         *  SCALE 0.568f / T 0.04509f = bypass-niveaugleiche Variante
-         *  (knee 0.2 %, KNOWLEDGE 306-(3)). */
-        const val ANTI_CLIP_SCALE = 1f
+        /** Anti-Clip v3.1 (KNOWLEDGE 309): Dennis-Regelung nach v3-Test
+         *  ("klingt schlecht" = Peak-Stauchung 2-4 % bei +9 dB). Neu: boost
+         *  k = 1.6 (+4.1 dB), S = 0.35481338*k, T = k*T_v2 (Systematik aus
+         *  306-(2)): Timbre = der abgesegnete v2, Lautheit calibriert auf
+         *  Bypass-rms (A/B ohne Sprung), knee nur noch 0.18/0.24 % aktiv
+         *  (Prodigy Sek. 15-25 gemessen). HF-Deckel -26.9 dBFS, Rest-
+         *  absenkung -4.9 dB, Peak-Fang ueber die weiche Exp-Knee-Kurve
+         *  (ab 0.9, Asymptote exakt 1.0). */
+        const val ANTI_CLIP_SCALE = 0.5677014f
         const val ANTI_CLIP_KNEE = 0.9f
-        const val ANTI_CLIP_T = 0.07943282f
+        const val ANTI_CLIP_T = 0.04509413f
         const val ANTI_CURVE = 12.5f
 
         /** Eq10-Transparent-Modus: Eingang 2^-7 / Ausgang 2^7 um den
