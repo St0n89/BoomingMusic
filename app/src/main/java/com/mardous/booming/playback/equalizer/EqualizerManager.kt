@@ -204,9 +204,9 @@ class EqualizerManager(
             .flowOn(Dispatchers.Main)
             .launchIn(eqScope)
 
-        soundSettings.map { it.clearAudioAntiClip }
-            .onEach { antiClip -> clearAudioProcessor.setAntiClip(antiClip) }
-            .catch { e -> Log.e(TAG, "clearAudioAntiClip collect failed", e) }
+        soundSettings.map { it.clearAudioVpt }
+            .onEach { enabled -> clearAudioProcessor.setVptEnabled(enabled) }
+            .catch { e -> Log.e(TAG, "clearAudioVpt collect failed", e) }
             .flowOn(Dispatchers.Main)
             .launchIn(eqScope)
 
@@ -682,9 +682,9 @@ class EqualizerManager(
         }
     }
 
-    suspend fun setClearAudioAntiClip(antiClip: Boolean) {
+    suspend fun setEnableClearAudioVpt(vpt: Boolean) {
         context.eqDataStore.edit { prefs ->
-            prefs[Keys.CLEAR_AUDIO_ANTI_CLIP] = antiClip
+            prefs[Keys.CLEAR_AUDIO_VPT] = vpt
         }
     }
 
@@ -1161,7 +1161,7 @@ class EqualizerManager(
             audioFloatOutput = prefs[Keys.AUDIO_FLOAT_OUTPUT] ?: false,
             skipSilence = prefs[Keys.SKIP_SILENCE] ?: false,
             clearAudio = clearAudio,
-            clearAudioAntiClip = prefs[Keys.CLEAR_AUDIO_ANTI_CLIP] ?: true
+            clearAudioVpt = prefs[Keys.CLEAR_AUDIO_VPT] ?: false
         )
     }
 
@@ -1205,7 +1205,7 @@ class EqualizerManager(
             val AUDIO_FLOAT_OUTPUT = booleanPreferencesKey("audio.float_output")
             val SKIP_SILENCE = booleanPreferencesKey("audio.skip_silence")
             val CLEAR_AUDIO = booleanPreferencesKey("audio.clear_audio")
-            val CLEAR_AUDIO_ANTI_CLIP = booleanPreferencesKey("audio.clear_audio.anti_clip")
+            val CLEAR_AUDIO_VPT = booleanPreferencesKey("audio.clear_audio_vpt")
             val REPLAYGAIN_MODE = stringPreferencesKey("replaygain.mode")
             val REPLAYGAIN_PREAMP = floatPreferencesKey("replaygain.preamp")
             val REPLAYGAIN_PREAMP_WITHOUT_GAIN = floatPreferencesKey("replaygain.preamp.without_gain")

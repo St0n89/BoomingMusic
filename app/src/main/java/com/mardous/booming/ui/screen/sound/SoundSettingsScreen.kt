@@ -89,6 +89,7 @@ fun SoundSettingsSheet(
     val audioFloatOutput = soundSettings.audioFloatOutput
     val skipSilence = soundSettings.skipSilence
     val clearAudio = soundSettings.clearAudio
+    val clearAudioVpt = soundSettings.clearAudioVpt
     val balance = soundSettings.balance
     val tempo = soundSettings.tempo
 
@@ -535,11 +536,12 @@ fun SoundSettingsSheet(
                         }
 
                         LabeledSwitch(
-                            checked = soundSettings.clearAudioAntiClip,
-                            title = stringResource(R.string.clear_audio_anti_clip_title),
-                            description = stringResource(R.string.clear_audio_anti_clip_description)
+                            checked = clearAudioVpt,
+                            enabled = clearAudio,
+                            title = stringResource(R.string.enable_clear_audio_vpt_title),
+                            description = stringResource(R.string.enable_clear_audio_vpt_description)
                         ) { checked ->
-                            viewModel.setClearAudioAntiClip(checked)
+                            viewModel.setEnableClearAudioVpt(checked)
                         }
                     }
                 }
