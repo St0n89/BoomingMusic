@@ -6,22 +6,30 @@ import kotlin.math.roundToLong
 import kotlin.math.sin
 
 /**
- * ClearAudio+ VPT-Studio-Kanal (48 kHz, mode 0), 1:1-Port des gegen den
- * Live-Firmware-Emulator validierten Python-Referenzmodells
- * (vpt_chain48.py: Korrelation 1.000 auf alle Testbloecke, max-diff 8e-6).
+ * ClearAudio+ VPT-Studio-Kanal (48 kHz, mode 0), STEREO-Port des gegen den
+ * Live-Firmware-Emulator validierten Python-Referenzmodells Vpt48S
+ * (vpt_stereo_model.py: Stereo-Musik corrL 0.999999/corrR 0.999998,
+ * Stereo-Sinus-Schnellcheck corr 1.000000/maxd 7.6e-6; Mono-Lauf bit-identisch
+ * zum alten gegen den Emulator validierten Mono-Modell).
  *
- * Kette pro Kernel-Lauf (jeder 2. Block, 512 Frames):
- *   er (io >>= 1) -> PHAN (roh = (8191*io)>>23) ->
- *   rDFT 1024 von [roh, 0...] in sb0-Slot phi&3 (PERM76) ->
- *   pro Runde (R1, R2): Akku = 4 GAIN-Zellformel-Laeufe
- *   (Slots (phi-c)&3, Kurven R1/R2 aus VptTables; sb1..3 sind Null-Spektren) ->
+ * Kette pro Kernel-Lauf (jeder 2. Block, 512 Frames), STEREO:
+ *   er (ioL>>=1, ioR>>=1) -> PHAN rohL=(8191*ioL)>>23 nach sb0-Slotring
+ *   (L-Spektren) UND rohR=(8191*ioR)>>23 nach sb1-Slotring (R-Spektren) ->
+ *   pro Runde (R1L+R1R -> ringL, R2L+R2R -> ringR): 4 Slots (phi-c)&3,
+ *   je Slot 2 GAIN-Laeufe in denselben Akku: L-Fenster (sb0[slot] +
+ *   Folge-Slot, bei slot==3 Spill in das frische sb1[0]-R-Spektrum, die
+ *   NULL-Kurve bank[1] neutralisiert den Beitrag) mit Kurve R1/R2[c],
+ *   dann R-Fenster (sb1[slot] + Folge-Slot, bei slot==3 Spill in sb2 =
+ *   Nullen) mit Kurve R1R/R2R[c] ->
  *   hermitesche iDFT Skala 1/1024 (PERMB9, front = y[0:512]) ->
- *   MAC ring[i] = sat(((front[i]+bank[i])·0x7fff0000)>>17) -> bank <- back.
+ *   MAC ring[i] = sat(((front[i]+bank[i])*0x7fff0000)>>17) -> bank <- back.
  * Ausgabe: 256 Frames pro Block; odd-Block ring[0:256], even ring[256:512];
- * Block 0 liefert Boot-Stille (Ring noch null).
+ * Block 0 liefert Boot-Stille (Ring noch null). Beide Eingangskanaele
+ * fliessen getrennt ein: outL = f(L, R), outR = g(L, R), dekoriert.
  */
 class VptChannel {
-    private val sb0 = Array(4) { IntArray(1032) }
+    private val sb0 = Array(4) { IntArray(1032) }  // L-Spektren
+    private val sb1 = Array(4) { IntArray(1032) }  // R-Spektren
     private var phi = 4
     private val bankL = IntArray(512)
     private val bankR = IntArray(512)
@@ -38,21 +46,23 @@ class VptChannel {
     private val srcF = IntArray(2048)
     private val akku = IntArray(2048)
     private val y = IntArray(1024)
-    private val roh = IntArray(512)
+    private val rohL = IntArray(512)
+    private val rohR = IntArray(512)
 
     /**
-     * Verarbeitet [inLen] Frames ab [inOff]. Pro abgeschlossenem 256er-Block
-     * fallen 256 Ausgabe-Frames (Ring-Slice) ab [outOff] an. Liefert die
-     * Anzahl geschriebener Frames (Rest < 256 bleibt intern gepuffert).
+     * Verarbeitet [inLen] Frames ab [inOff]; L- und R-Kanal fliessen getrennt
+     * ein (keine Mono-Summe: das Original ist eine echte Stereo-Kette).
+     * Pro abgeschlossenem 256er-Block fallen 256 Ausgabe-Frames
+     * (Ring-Slice) ab [outOff] an. Liefert die Anzahl geschriebener Frames.
      */
     fun process(
-        inL: FloatArray, inOff: Int, inR: FloatArray, inLen: Int,
+        inL: FloatArray, inLOff: Int, inR: FloatArray, inROff: Int, inLen: Int,
         outL: FloatArray, outOff: Int, outR: FloatArray
     ): Int {
         var written = 0
         for (i in 0 until inLen) {
-            histL[histPos] = f2fix(inL[inOff + i])
-            histR[histPos] = f2fix(inR[inOff + i])
+            histL[histPos] = f2fix(inL[inLOff + i])
+            histR[histPos] = f2fix(inR[inROff + i])
             histPos = (histPos + 1) and 511
             totalFrames++
             if ((totalFrames and 255) == 0) {
@@ -81,16 +91,25 @@ class VptChannel {
     private fun kernelRun() {
         val p = phi and 3
         for (j in 0 until 512) {
-            val io = histL[(histPos + j) and 511] shr 1
-            roh[j] = ((8191L * io) shr 23).toInt()
+            val ioL = histL[(histPos + j) and 511] shr 1
+            val ioR = histR[(histPos + j) and 511] shr 1
+            rohL[j] = ((8191L * ioL) shr 23).toInt()
+            rohR[j] = ((8191L * ioR) shr 23).toInt()
         }
-        rdft1024(roh, sb0[p])
+        rdft1024(rohL, sb0[p])
+        rdft1024(rohR, sb1[p])
         for (round in 0..1) {
-            val kurven = if (round == 0) VptTables.R1 else VptTables.R2
+            val kurvenL = if (round == 0) VptTables.R1 else VptTables.R2
+            val kurvenR = if (round == 0) VptTables.R1R else VptTables.R2R
             java.util.Arrays.fill(akku, 0)
             for (c in 0..3) {
-                slotSrc2048((phi - c) and 3)
-                gainOp(srcF, kurven[c], akku)
+                val slot = (phi - c) and 3
+                // L-Fenster: bei slot==3 spillt es in das frische sb1[0]
+                slotSrc2048(sb0, slot, sb1)
+                gainOp(srcF, kurvenL[c], akku)
+                // R-Fenster: bei slot==3 spillt es in sb2 = Nullen
+                slotSrc2048(sb1, slot, null)
+                gainOp(srcF, kurvenR[c], akku)
             }
             idft1024(akku, y)
             val bank = if (round == 0) bankL else bankR
@@ -106,11 +125,17 @@ class VptChannel {
         phi++
     }
 
-    private fun slotSrc2048(p: Int) {
-        val a = sb0[p]
+    /** 2048 kontiguous ueber die Bankgrenze: Slot p voll + die naechsten
+     *  1016 Werte aus bank[p+1]; bei p==3 aus nxt[0] (L) bzw. Nullen (nxt =
+     *  null, R: sb2 bleibt immer null da PERM#3/#4 nur Nullen schreiben). */
+    private fun slotSrc2048(bank: Array<IntArray>, p: Int, nxt: Array<IntArray>?) {
+        val a = bank[p]
         for (j in 0 until 1032) srcF[j] = a[j]
         if (p < 3) {
-            val b = sb0[p + 1]
+            val b = bank[p + 1]
+            for (j in 0 until 1016) srcF[1032 + j] = b[j]
+        } else if (nxt != null) {
+            val b = nxt[0]
             for (j in 0 until 1016) srcF[1032 + j] = b[j]
         } else {
             for (j in 0 until 1016) srcF[1032 + j] = 0

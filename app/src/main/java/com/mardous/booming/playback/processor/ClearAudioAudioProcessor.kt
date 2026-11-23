@@ -112,19 +112,22 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
     private var pendingCount = 0
 
     /**
-     * VPT-Studio-Stufe (KNOWLEDGE 368-375, gegen den Live-Emulator validiert:
-     * Korrelation 1.000 auf alle Testbloecke, max-diff 8e-6): Mono-Summe
-     * (L+R)/2 -> dekorreliertes Stereo via rDFT 1024, GAIN-Kurven R1 -> links
-     * / R2 -> rechts, hermitesche iDFT, MAC-Ring. Nur 48 kHz / 2 Kanaele
-     * (Kurven sind 48-k-extrahiert); ersetzt das Eingangsframe der vorgelager-
-     * ten Kette wie die Firmware die Studio-Stufe vor dem Upcon. Block 0 =
-     * Boot-Stille, Latenz 512 Frames (~10.7 ms). Der finale outl/outr-Mix-
-     * faktor der Firmware (DPFvpt Epilog) ist noch offen; REPLACE ist die
-     * treue Struktur. Erst deko.
+     * VPT-Studio-Stufe (KNOWLEDGE 368-379, gegen den Live-Emulator validiert:
+     * Stereo-Musik corrL 0.999999 / corrR 0.999998, Stereo-Sinus-Schnellcheck
+     * corr 1.000000 / maxd 7.6e-6): ECHTE STEREO-Kette. L- und R-Spektrum
+     * getrennt (sb0/sb1), je Runde 4 L-GAIN + 4 R-GAIN-Calls in denselben
+     * Akku (R1+R1R -> links / R2+R2R -> rechts), Fenster kontiguous ueber
+     * die Bankgrenze (L-slot3 spillt ins frische R-Spektrum, NULL-Kurve
+     * neutralisiert). L/R fliessen getrennt ein: outL = f(L, R), outR =
+     * g(L, R), dekoriert. Nur 48 kHz / 2 Kanaele (Kurven sind 48-k-
+     * extrahiert); ersetzt das Eingangsframe der vorgelagerten Kette wie
+     * die Firmware die Studio-Stufe vor dem Upcon. Block 0 = Boot-Stille,
+     * Latenz 512 Frames (~10.7 ms). Der finale outl/outr-Mixfaktor der
+     * Firmware (DPFvpt Epilog) ist noch offen; REPLACE ist die treue
+     * Struktur. Erst deko.
      */
     private var vpt: VptChannel? = null
     @Volatile private var vptEnabled = false
-    private val vptInBuf = FloatArray(FRAME)
     private val vptOutL = FloatArray(FRAME)
     private val vptOutR = FloatArray(FRAME)
 
@@ -402,8 +405,9 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
         val l = frame[0]
         val r = frame[1]
         val n = l.size
-        for (i in 0 until n) vptInBuf[i] = (l[i] + r[i]) * 0.5f
-        val written = ch.process(vptInBuf, 0, vptInBuf, n, vptOutL, 0, vptOutR)
+        // L und R getrennt ins Modell (KEINE Mono-Summe: die 48k-Kette ist
+        // laut Emulator-Beweis wirklich stereo, PERM#1 = L-, PERM#2 = R-Spektren)
+        val written = ch.process(l, 0, r, 0, n, vptOutL, 0, vptOutR)
         val out = Array(2) { FloatArray(n) }
         for (i in 0 until n) {
             out[0][i] = if (i < written) vptOutL[i] else 0f
