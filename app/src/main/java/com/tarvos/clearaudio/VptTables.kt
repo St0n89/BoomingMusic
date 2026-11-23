@@ -3,9 +3,12 @@ package com.tarvos.clearaudio
 /** ClearAudio+ VPT-Studio-Kurven (48 kHz, mode 0) aus lib-RE.
  *  Stereo: R1/R2 = L-Kurven (Akku-Slots sb0), R1R/R2R = R-Kurven (sb1);
  *  je Bank ist Kurve[1] komplett null (Firmware: NULL-Pointer), sie
- *  neutralisiert den window-Spill des L-slot3 in sb1.slot0. */
+ *  neutralisiert den window-Spill des L-slot3 in sb1.slot0.
+ *  by lazy je Bank: 16 Arrays a 1024 Werte sprengen sonst die
+ *  JVM-Grenze von 64 KiB Bytecode pro <clinit>-Methode (v2-Build). */
 object VptTables {
-    val R1: Array<IntArray> = arrayOf(
+    val R1: Array<IntArray> by lazy {
+        arrayOf(
         intArrayOf(
             -2497, 5571, -830, 5791, -1391, 6314, -1632, 6891, -1663, 7382, -1578, 7760, -1442, 8021, -1316, 8187,
             -1226, 8311, -1149, 8422, -1076, 8515, -1020, 8596, -967, 8684, -898, 8767, -828, 8824, -777, 8866,
@@ -270,8 +273,10 @@ object VptTables {
             1, 0, -1, -2, 1, 1, 0, -4, 0, 2, 0, -3, 0, 2, 2, -2,
             -1, 0, 0, -2, -1, 0, -1, 0, 1, 2, 0, -1, 2, 1, 0, -4,
         ),
-    )
-    val R2: Array<IntArray> = arrayOf(
+        )
+    }
+    val R2: Array<IntArray> by lazy {
+        arrayOf(
         intArrayOf(
             8, 5621, 1547, 5410, 2995, 4779, 4227, 3746, 5112, 2373, 5537, 776, 5425, -875, 4772, -2372,
             3683, -3494, 2383, -4095, 1157, -4191, 208, -3972, -448, -3700, -981, -3541, -1602, -3467, -2417, -3305,
@@ -536,8 +541,10 @@ object VptTables {
             0, 1, 0, -1, 0, 1, 2, -2, 0, -1, -1, -2, 0, 0, -1, -2,
             0, 1, 0, -1, 0, 2, 1, -3, 0, 0, 1, -3, -2, 0, 0, 0,
         ),
-    )
-    val R1R: Array<IntArray> = arrayOf(
+        )
+    }
+    val R1R: Array<IntArray> by lazy {
+        arrayOf(
         intArrayOf(
             -14, 5634, 1403, 5463, 2739, 4946, 3920, 4088, 4843, 2920, 5404, 1517, 5518, 3, 5150, -1449,
             4355, -2642, 3301, -3419, 2233, -3745, 1361, -3751, 751, -3667, 290, -3682, -222, -3834, -941, -4008,
@@ -802,8 +809,10 @@ object VptTables {
             0, 1, 0, -2, 1, 1, 0, -4, -1, 1, 0, -2, 0, 2, 1, -2,
             -1, 0, 0, -1, 0, 0, -1, 0, 2, 1, 0, -2, 1, 1, -1, -4,
         ),
-    )
-    val R2R: Array<IntArray> = arrayOf(
+        )
+    }
+    val R2R: Array<IntArray> by lazy {
+        arrayOf(
         intArrayOf(
             -2497, 5571, -830, 5791, -1391, 6314, -1632, 6891, -1663, 7382, -1578, 7760, -1442, 8021, -1316, 8187,
             -1226, 8311, -1149, 8422, -1076, 8515, -1020, 8596, -967, 8684, -898, 8767, -828, 8824, -777, 8866,
@@ -1068,5 +1077,6 @@ object VptTables {
             -2, 0, 0, 0, 0, 1, 1, -1, 0, -1, -1, -1, 1, 0, -1, -3,
             0, 1, -1, -2, 0, 3, 2, -3, -1, 1, 2, -2, -2, 0, 0, 0,
         ),
-    )
+        )
+    }
 }
