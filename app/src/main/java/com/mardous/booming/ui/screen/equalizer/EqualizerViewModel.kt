@@ -187,6 +187,10 @@ class EqualizerViewModel(
         equalizerManager.setEnableClearAudio(enabled)
     }
 
+    fun setClearAudioAntiClip(enabled: Boolean) = viewModelScope.launch {
+        equalizerManager.setClearAudioAntiClip(enabled)
+    }
+
     fun setEnableClearAudioVpt(enabled: Boolean) = viewModelScope.launch {
         equalizerManager.setEnableClearAudioVpt(enabled)
     }
