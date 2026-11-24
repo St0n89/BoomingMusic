@@ -553,7 +553,7 @@
     <string name="clear_audio_anti_clip_title">Overload protection</string>
     <string name="clear_audio_anti_clip_description">Softly catches peak overshoots of the ClearAudio+ chain (9 kHz split, adaptive HF ceiling at -27 dBFS, gentle knee curve) and is calibrated to bypass loudness so on/off comparison works without a level jump. The original chain pushes peaks up to +31 dB above full scale; unchecked they would crackle when clipped to 16-bit PCM. Off means the untouched original chain.</string>
     <string name="clear_audio_vpt_title">VPT studio stage</string>
-    <string name="clear_audio_vpt_description">Adds the Sony VPT studio stage: maps the mono sum of both channels to de-correlated stereo, reverse-engineered from the Walkman firmware. 48 kHz sources only. While on, the studio stage replaces the input of the DSEE AI chain.</string>
+    <string name="clear_audio_vpt_description">Experimental. Adds the Sony VPT studio stage: a true stereo stage (L and R spectrum processed separately), bit-accurate against the Walkman firmware kernel. 48 kHz sources only. The active kernel produces a constant HF whine/buzz (firmware fidelity, not a port bug); the Walkman reference sound runs this stage transparent, so it defaults to off. While on, the studio stage replaces the input of the DSEE AI chain.</string>
     <string name="clear_audio_mode_hint">Master mode: bypasses equalizer and ReplayGain</string>
     <string name="clear_audio_status_active">Active: DSEE upconversion, output at %1$d Hz</string>
     <string name="clear_audio_status_bypassed">Enabled, but current format (%1$.1f kHz, %2$d ch, %3$s) is bypassed. Playback is unaffected.</string>

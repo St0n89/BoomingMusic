@@ -392,9 +392,10 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
     }
 
     /**
-     * VPT-Studio-Stufe (nur 48 kHz, 2 Kanaele, Schalter an): bildet die
-     * Mono-Summe auf dekorreliertes Stereo ab und ersetzt damit das
-     * Eingangsframe der Full-Chain. Alle anderen Konfigurationen bleiben
+     * VPT-Studio-Stufe (nur 48 kHz, 2 Kanaele, Schalter an): ECHTE STEREO-
+     * Stufe, L und R fliessen getrennt ins Modell (KEINE Mono-Summe: die
+     * 48k-Kette ist laut Emulator-Beweis wirklich stereo, PERM#1 = L-,
+     * PERM#2 = R-Spektren) und ersetzt damit das Eingangsframe der vorgelagerten Kette. Alle anderen Konfigurationen bleiben
      * unberuehrt (Passthrough). VptChannel verarbeitet puffernd: pro 256er-
      * Block fallen 256 Frames an (Block 0 = Boot-Stille). Lazy-Erstellung,
      * damit auch ein mid-stream-Zuschalten ohne Reconfigure greift.
