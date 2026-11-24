@@ -10,7 +10,6 @@ import com.tarvos.clearaudio.DsxSimulator
 import com.tarvos.clearaudio.Eq10Channel
 import com.tarvos.clearaudio.Eq10Tables
 import com.tarvos.clearaudio.FullChainChannel
-import com.tarvos.clearaudio.VptChannel
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.abs
@@ -111,26 +110,6 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
     private var pending: Array<FloatArray>? = null         // je Kanal bis 255 Samples (f32)
     private var pendingCount = 0
 
-    /**
-     * VPT-Studio-Stufe (KNOWLEDGE 368-379, gegen den Live-Emulator validiert:
-     * Stereo-Musik corrL 0.999999 / corrR 0.999998, Stereo-Sinus-Schnellcheck
-     * corr 1.000000 / maxd 7.6e-6): ECHTE STEREO-Kette. L- und R-Spektrum
-     * getrennt (sb0/sb1), je Runde 4 L-GAIN + 4 R-GAIN-Calls in denselben
-     * Akku (R1+R1R -> links / R2+R2R -> rechts), Fenster kontiguous ueber
-     * die Bankgrenze (L-slot3 spillt ins frische R-Spektrum, NULL-Kurve
-     * neutralisiert). L/R fliessen getrennt ein: outL = f(L, R), outR =
-     * g(L, R), dekoriert. Nur 48 kHz / 2 Kanaele (Kurven sind 48-k-
-     * extrahiert); ersetzt das Eingangsframe der vorgelagerten Kette wie
-     * die Firmware die Studio-Stufe vor dem Upcon. Block 0 = Boot-Stille,
-     * Latenz 512 Frames (~10.7 ms). Der finale outl/outr-Mixfaktor der
-     * Firmware (DPFvpt Epilog) ist noch offen; REPLACE ist die treue
-     * Struktur. Erst deko.
-     */
-    private var vpt: VptChannel? = null
-    @Volatile private var vptEnabled = false
-    private val vptOutL = FloatArray(FRAME)
-    private val vptOutR = FloatArray(FRAME)
-
     // Full-Chain-Scratch (Wiederverwendung, keine Allokation im Frame)
     private val fFresh = FloatArray(FULL_BLOCK)
     private val fOut = FloatArray(2 * FULL_BLOCK)
@@ -140,12 +119,6 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
     fun setEnabled(value: Boolean) {
         enabled = value
         _status.value = _status.value.copy(enabled = value)
-    }
-
-    /** VPT-Studio-Stufe zu-/abschalten (UI). Greift ab dem naechsten 256er-Block. */
-    @Synchronized
-    fun setVptEnabled(value: Boolean) {
-        vptEnabled = value
     }
 
     /**
@@ -286,7 +259,6 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
         simConfig = null
         fullCh = null
         eqCh = null
-        vpt = null
         pending = null
         pendingCount = 0
         releaseAntiClipState()
@@ -364,7 +336,7 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
             enabled && (sampleRate == 48000 || sampleRate == 44100) ->
                 // Beide Raten: bit-genauer Full-Chain-Port (48k: KNOWLEDGE
                 // 289/291; 44.1k: 293, K65/TAPS/SA-Taps aus FC44).
-                processFrameFull(applyVpt(frame))
+                processFrameFull(frame)
             enabled -> {
                 // 44.1 kHz: Phase-3e-Architektur (Site-1-Upsampling + GUCF-Wet),
                 // 40/40 Harness-Checks, Image-Rejection ~47 dB.
@@ -389,32 +361,6 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
                 }.toTypedArray()
             }
         }
-    }
-
-    /**
-     * VPT-Studio-Stufe (nur 48 kHz, 2 Kanaele, Schalter an): ECHTE STEREO-
-     * Stufe, L und R fliessen getrennt ins Modell (KEINE Mono-Summe: die
-     * 48k-Kette ist laut Emulator-Beweis wirklich stereo, PERM#1 = L-,
-     * PERM#2 = R-Spektren) und ersetzt damit das Eingangsframe der vorgelagerten Kette. Alle anderen Konfigurationen bleiben
-     * unberuehrt (Passthrough). VptChannel verarbeitet puffernd: pro 256er-
-     * Block fallen 256 Frames an (Block 0 = Boot-Stille). Lazy-Erstellung,
-     * damit auch ein mid-stream-Zuschalten ohne Reconfigure greift.
-     */
-    private fun applyVpt(frame: Array<FloatArray>): Array<FloatArray> {
-        if (!vptEnabled || frame.size < 2 || sampleRate != 48000) return frame
-        val ch = vpt ?: VptChannel().also { vpt = it }
-        val l = frame[0]
-        val r = frame[1]
-        val n = l.size
-        // L und R getrennt ins Modell (KEINE Mono-Summe: die 48k-Kette ist
-        // laut Emulator-Beweis wirklich stereo, PERM#1 = L-, PERM#2 = R-Spektren)
-        val written = ch.process(l, 0, r, 0, n, vptOutL, 0, vptOutR)
-        val out = Array(2) { FloatArray(n) }
-        for (i in 0 until n) {
-            out[0][i] = if (i < written) vptOutL[i] else 0f
-            out[1][i] = if (i < written) vptOutR[i] else 0f
-        }
-        return out
     }
 
     /**

@@ -14,7 +14,6 @@ data class SoundSettings(
     val skipSilence: Boolean,
     val clearAudio: Boolean,
     val clearAudioAntiClip: Boolean,
-    val clearAudioVpt: Boolean = false,
 ) {
     companion object {
         val Unspecified = SoundSettings(

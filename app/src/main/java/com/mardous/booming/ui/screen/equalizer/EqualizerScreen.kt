@@ -671,17 +671,6 @@ fun EqualizerScreen(
                     )
                 }
                 item {
-                    // VPT-Studio-Stufe (KNOWLEDGE 368-376): de-korreliertes
-                    // Stereo aus der Mono-Summe, 48-kHz-Kurven aus der
-                    // Walkman-Firmware; nur bei 48-kHz-Quellen aktiv.
-                    MaterialSwitch(
-                        title = stringResource(R.string.clear_audio_vpt_title),
-                        subtitle = stringResource(R.string.clear_audio_vpt_description),
-                        isChecked = soundSettings.clearAudioVpt,
-                        onClick = { eqViewModel.setEnableClearAudioVpt(soundSettings.clearAudioVpt.not()) }
-                    )
-                }
-                item {
                     MaterialSwitch(
                         title = stringResource(R.string.enable_equalizer),
                         subtitle = if (!eqState.supported) stringResource(R.string.not_supported) else null,
