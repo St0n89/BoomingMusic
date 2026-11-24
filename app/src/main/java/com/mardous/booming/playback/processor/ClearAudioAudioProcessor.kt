@@ -5,8 +5,6 @@ import androidx.media3.common.C
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.common.audio.BaseAudioProcessor
 import androidx.media3.common.util.UnstableApi
-import com.tarvos.clearaudio.DsxConfig
-import com.tarvos.clearaudio.DsxSimulator
 import com.tarvos.clearaudio.Eq10Channel
 import com.tarvos.clearaudio.Eq10Tables
 import com.tarvos.clearaudio.FullChainChannel
@@ -61,20 +59,22 @@ data class ClearAudioStatus(
  *
  * Aktiv bei 48 kHz und 44.1 kHz, 1-2 Kanäle, PCM16/Float:
  *  - 48 kHz: volle Chain (Phase 3f, bit-exakt, oben beschrieben)
- *  - 44.1 kHz: die in Phase 3e gemessene und validierte Architektur
- *    (Site-1-Fullband-Upsampling + GUCF-Wet), bis eine eigene 44.1-kHz-
- *    Full-Chain-Emulator-Referenz vorliegt (die Chain-Koeffizienten
- *    K65/Taps/RODATA sind die gemessene 48-kHz-Konfiguration).
+ *  - 44.1 kHz: Full-Chain mit den FC44-44.1-k-Koeffizienten (KNOWLEDGE 293;
+ *    Tabellenwahl per FullChainChannel-44100-Flag).
  * Alles andere wird unangetastet durchgereicht (NOT_SET-Bypass, kein Werfen
  * einer UnhandledAudioFormatException, da die DefaultAudioSink daraus eine
  * ConfigurationException macht, die die Wiedergabe komplett stoppt).
  *
- * Ist der Schalter beim Configure aus, gibt der Processor NOT_SET zurueck
- * (1x-Passthrough, keine Kosten). Wird der Schalter mitten im Stream abge-
- * schaltet, bleibt das Ausgabeformat 2x (Formatwechsel nur per onConfigure):
- * dann laeuft das reine Site-1-Upsampling des Phase-3e-Stacks ohne
- * Effektanteil (Full-Chain-Kanaele halten dabei ihren Zustand und uebernehmen
- * beim naechsten 256er-Frame nach dem Einschalten wieder nahtlos).
+ * HOT-TOGGLE: Bei unterstuetztem Format bleibt der Processor IMMER in der
+ * Kette (Ausgabe konstant 2x, auch mit ausgeschaltetem Effekt); NOT_SET gibt
+ * er nur noch fuer nicht unterstuetzte Formate zurueck. Der Schalter wirkt
+ * dadurch in BEIDE Richtungen sofort, auch mitten im Song: an = Full-Chain,
+ * aus = transparentes Kaiser-FIR-2x-Upsampling (Pegel == Bypass, ~80 dB
+ * Image-Rejection statt ~47 dB Phase-3e-Site-1; s. transparentUpsample2x).
+ * Beim Umschalten blendet processFrame genau einen Frame (~5.3 ms) raised-
+ * cosine zwischen beiden Pfaden (Schalt-Click-Kill). Nebeneffekt:
+ * die Sink laeuft auch im Aus-Zustand mit 96/88.2 kHz (Preis der
+ * Schaltbarkeit).
  *
  * Verarbeitet in 256er-Frames (= 4 Full-Chain-64er-Bloecke je Kanal) mit
  * Zero-Pad-Flush am Streamende; alle Bloecke eines queueInput-Aufrufs
@@ -103,8 +103,9 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
     private var channels = 0
     private var floatIn = false
 
-    private var simulator: DsxSimulator? = null          // Site-1-Pfad (mid-stream off)
-    private var simConfig: Config? = null
+    private var buildCfg: Config? = null                   // Format, auf das fullCh/eqCh/upHist gebaut sind
+    private var upHist: Array<FloatArray>? = null          // Transparent-Pfad: 84er-History je Kanal (Schalter aus)
+    private var lastEnabled = false                        // Pfad-Stellung des letzten Frames (Crossfade-Trigger)
     private var fullCh: Array<FullChainChannel>? = null    // Full-Chain-Pfad (on)
     private var eqCh: Array<Eq10Channel>? = null            // Eq10 UNIQUE je Kanal (on)
     private var pending: Array<FloatArray>? = null         // je Kanal bis 255 Samples (f32)
@@ -202,25 +203,25 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
         val sr = inputAudioFormat.sampleRate
-        // Phase 3f.1: 48 kHz = Full-Chain; 44.1 kHz = Phase-3e-Wet-Architektur.
+        // 48 kHz UND 44.1 kHz = Full-Chain (Tabellenwahl s. FullChainChannel).
         val ok = (sr == 48000 || sr == 44100) &&
             (inputAudioFormat.channelCount == 1 || inputAudioFormat.channelCount == 2) &&
             (inputAudioFormat.encoding == C.ENCODING_PCM_16BIT || inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT)
-        if (!ok || !enabled) {
-            // Bypass: NOT_SET signalisiert der Pipeline, diesen Processor zu
-            // ueberbruecken. NIEMALS UnhandledAudioFormatException werfen.
-            sampleRate = if (ok) sr else 0
-            channels = if (ok) inputAudioFormat.channelCount else 0
+        if (!ok) {
+            // Bypass NUR noch bei nicht unterstuetztem Format: NOT_SET
+            // ueberbrueckt den Processor (dann wirkt der Schalter erst wieder
+            // ab dem naechsten Stream-Formatwechsel, s. KDoc HOT-TOGGLE).
+            // NIEMALS UnhandledAudioFormatException werfen.
+            sampleRate = 0
+            channels = 0
             floatIn = false
-            if (!ok) {
-                simulator = null
-                simConfig = null
-                fullCh = null
-                eqCh = null
-                pending = null
-                pendingCount = 0
-                releaseAntiClipState()
-            }
+            buildCfg = null
+            fullCh = null
+            eqCh = null
+            upHist = null
+            pending = null
+            pendingCount = 0
+            releaseAntiClipState()
             // Diagnose: auch im Bypass das GESEHENE Format melden (der
             // Status kennt kHz/Kanaele/Encoding, damit die UI sagen kann,
             // WARUM gebypasst wird). Interne Member bleiben bei !ok null.
@@ -255,24 +256,24 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
     }
 
     override fun onReset() {
-        simulator = null
-        simConfig = null
+        buildCfg = null
         fullCh = null
         eqCh = null
+        upHist = null
+        lastEnabled = enabled
         pending = null
         pendingCount = 0
         releaseAntiClipState()
     }
 
     override fun onQueueEndOfStream() {
-        val sim = simulator
         val pend = pending
-        if (sim != null && pend != null && pendingCount > 0) {
+        if (pend != null && pendingCount > 0) {
             // angebrochenen Frame mit Nullen auffuellen und verarbeiten (Firmware-Flush)
             val frame = Array(channels) { ch ->
                 FloatArray(FRAME) { if (it < pendingCount) pend[ch][it] else 0f }
             }
-            emitFrames(listOf(processFrame(sim, frame)))
+            emitFrames(listOf(processFrame(frame)))
         }
         pending = null
         pendingCount = 0
@@ -288,18 +289,16 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
         inputBuffer.order(ByteOrder.LITTLE_ENDIAN)
 
         val cfg = Config(sampleRate, channels, floatIn)
-        var sim = simulator
-        if (sim == null || simConfig != cfg) {
-            // Stream-Format hat sich geaendert: Site-1-Stack + Full-Chain-Kanaele
+        if (buildCfg == null || buildCfg != cfg) {
+            // Stream-Format hat sich geaendert (oder erster Block): BEIDE Pfade
             // mit neuer Konfiguration neu aufbauen (Kaltstart = alles 0).
-            sim = DsxSimulator(DsxConfig(ch = channels, sr = sampleRate)).also {
-                simulator = it
-                simConfig = cfg
-                fullCh = Array(channels) { FullChainChannel(sampleRate == 44100) }
-                eqCh = Array(channels) { Eq10Channel(eq10Coeffs()) }
-                pending = null
-                pendingCount = 0
-            }
+            buildCfg = cfg
+            fullCh = Array(channels) { FullChainChannel(sampleRate == 44100) }
+            eqCh = Array(channels) { Eq10Channel(eq10Coeffs()) }
+            upHist = Array(channels) { FloatArray(UP2X_TAPS) }
+            pending = null
+            pendingCount = 0
+            lastEnabled = enabled
         }
 
         val outBlocks = ArrayList<Array<FloatArray>>()
@@ -315,7 +314,7 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
             }
             pendingCount++
             if (pendingCount == FRAME) {
-                outBlocks.add(processFrame(sim, pend))
+                outBlocks.add(processFrame(pend))
                 pendingCount = 0
             }
         }
@@ -325,42 +324,70 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
     }
 
     /**
-     * Ein 256er-Eingabeframe -> 512 Ausgangswerte je Kanal @2x Rate
-     * (48 kHz UND 44.1 kHz, Tabellenwahl per FullChainChannel-Flag).
-     * An (44.1 und 48 kHz): Full-Chain (rate-spezifische Tabellen); aus:
-     * Site-1. Der Phase-3e-Wet-Pfad faellt damit weg (44.1-Luecke 293).
-     * Das Ausgabeformat bleibt in allen Faellen 2x (siehe KDoc der Klasse).
+     * Ein 256er-Eingabeframe -> 512 Ausgangswerte je Kanal @2x. Das Ausgabe-
+     * format ist konstant (immer 2x, s. KDoc HOT-TOGGLE), deshalb wirkt der
+     * Master-Schalter in beide Richtungen SOFORT, auch mitten im Song:
+     * an = Full-Chain (Tabellenwahl per FullChainChannel-Flag, 44.1+48 kHz),
+     * aus = transparentUpsample2x. Beim Umschalten wird der Umschalt-Frame
+     * ueber BEIDE Pfade gerechnet und raised-cosine geblendet (0 -> 1,
+     * ~5.3 ms), damit kein Schalt-Klick durch die Kette geht. Jeder Pfad
+     * laeuft mit eigenem State; der alte Pfad berechnet den Blend-Frame noch
+     * einmal mit (Einmal-Advance, akustisch wirkungslos).
      */
-    private fun processFrame(sim: DsxSimulator, frame: Array<FloatArray>): Array<FloatArray> {
-        return when {
-            enabled && (sampleRate == 48000 || sampleRate == 44100) ->
-                // Beide Raten: bit-genauer Full-Chain-Port (48k: KNOWLEDGE
-                // 289/291; 44.1k: 293, K65/TAPS/SA-Taps aus FC44).
-                processFrameFull(frame)
-            enabled -> {
-                // 44.1 kHz: Phase-3e-Architektur (Site-1-Upsampling + GUCF-Wet),
-                // 40/40 Harness-Checks, Image-Rejection ~47 dB.
-                val dbl = Array(frame.size) { ch ->
-                    DoubleArray(frame[ch].size) { frame[ch][it].toDouble() }
+    private fun processFrame(frame: Array<FloatArray>): Array<FloatArray> {
+        val nowEnabled = enabled
+        val wasEnabled = lastEnabled
+        lastEnabled = nowEnabled
+        val out = if (nowEnabled) processFrameFull(frame) else transparentUpsample2x(frame)
+        if (nowEnabled != wasEnabled) {
+            val prev = if (nowEnabled) transparentUpsample2x(frame) else processFrameFull(frame)
+            val n = out[0].size
+            for (ch in out.indices) {
+                val oc = out[ch]
+                val pc = prev[ch]
+                for (i in 0 until n) {
+                    val w = (0.5 - 0.5 * Math.cos(Math.PI * (i + 0.5) / n)).toFloat()
+                    oc[i] = (1f - w) * pc[i] + w * oc[i]
                 }
-                val (dry, wet) = sim.executeFrameDryWet(dbl)
-                Array(frame.size) { ch ->
-                    val d = dry[ch]
-                    val w = wet[ch]
-                    FloatArray(d.size) { i -> (d[i] + w[i]).toFloat() }
-                }
-            }
-            else -> {
-                // Mid-stream aus: bewaehrtes Site-1-Upsampling der Phase 3e
-                // (Firmware-Fenstertabelle, Image-Rejection ~47 dB).
-                val dbl = Array(frame.size) { ch ->
-                    DoubleArray(frame[ch].size) { frame[ch][it].toDouble() }
-                }
-                sim.executeFrameUpsample2x(dbl).map { arr ->
-                    FloatArray(arr.size) { arr[it].toFloat() }
-                }.toTypedArray()
             }
         }
+        return out
+    }
+
+    /**
+     * Transparent-2x-Pfad (Schalter aus): linearphasiges Kaiser-FIR in
+     * Polyphase-Form (168er-Prototyp, beta 7.857, Grenzfrequenz 0.25 ->
+     * ~80 dB Image-Rejection ab 26 kHz bei flachem Durchlass bis 22 kHz;
+     * Validierung in Python gegen Site-1: 47 dB -> 80 dB). DC-Verstaerkung
+     * je Phase exakt 1 (normiert), d.h. Pegel == Bypass. Konstante Gruppen-
+     * verzoegerung 83.5 Samples @2x (~0.9 ms). Liefert zu n Inputs exakt
+     * 2n Ausgangswerte je Kanal, History laeuft ueber Frames fort.
+     */
+    private fun transparentUpsample2x(frame: Array<FloatArray>): Array<FloatArray> {
+        val hist = upHist
+            ?: Array(frame.size) { FloatArray(UP2X_TAPS) }.also { upHist = it }
+        val out = Array(frame.size) { FloatArray(2 * frame[0].size) }
+        for (ch in frame.indices) {
+            val h = hist[ch]
+            val srcCh = frame[ch]
+            val dst = out[ch]
+            var o = 0
+            for (i in srcCh.indices) {
+                // History: h[UP2X_TAPS-1] = neuestes, h[0] = aeltestes Sample
+                for (j in 0 until UP2X_TAPS - 1) h[j] = h[j + 1]
+                h[UP2X_TAPS - 1] = srcCh[i]
+                var ye = 0f
+                var yo = 0f
+                for (k in 0 until UP2X_TAPS) {
+                    val xk = h[UP2X_TAPS - 1 - k]   // x[input - k], k = Lag
+                    ye += UP2X_EVEN[k] * xk
+                    yo += UP2X_ODD[k] * xk
+                }
+                dst[o++] = ye
+                dst[o++] = yo
+            }
+        }
+        return out
     }
 
     /**
@@ -432,9 +459,9 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
         for (block in outBlocks) {
             for (s in 0 until frameLen) {
                 for (ch in 0 until channels) {
-                    // Anti-Clip nur im aktiven ClearAudio-Modus: die Site-1-
-                    // Upsampling-Pfade (enabled=false bzw. Bypass) brauchen
-                    // keine Absenkung, dort bleibt der Pegel 1:1.
+                    // Anti-Clip nur im aktiven ClearAudio-Modus: der
+                    // Transparent-Pfad (enabled=false) und der NOT_SET-Bypass
+                    // brauchen keine Absenkung, dort bleibt der Pegel 1:1.
                     val v = if (enabled && antiClip) applyAntiClip(ch, block[ch][s]) else block[ch][s]
                     if (floatIn) {
                         buffer.putInt(v.toBits())
@@ -471,5 +498,51 @@ class ClearAudioAudioProcessor : BaseAudioProcessor() {
          *  umgehen; exakte Zweierpotenzen, f32-verlustfrei. */
         const val EQ10_IN_SCALE = 1f / 128f
         const val EQ10_OUT_GAIN = 128f
+
+        /** Transparent-2x-Off-Pfad: Kaiser-FIR-Polyphase (Prototyp 168
+         * Taps = 84 je Phase, beta 7.857 -> ~80 dB Image-Rejection, DC je
+         * Phase exakt 1; Python-validiert, s. KNOWLEDGE Hot-Toggle-Punkt). */
+        const val UP2X_TAPS = 84
+        const val UP2X_BETA = 7.857
+        const val UP2X_FC = 0.25            // Grenzfrequenz cycles/sample @2x-Rate
+        val UP2X_EVEN = FloatArray(UP2X_TAPS)
+        val UP2X_ODD = FloatArray(UP2X_TAPS)
+
+        private fun besselI0(x: Double): Double {
+            var sum = 1.0
+            var term = 1.0
+            val half = x / 2.0
+            for (k in 1 until 200) {
+                val f = half / k
+                term *= f * f
+                sum += term
+                if (term < 1e-18 * sum) break
+            }
+            return sum
+        }
+
+        init {
+            val n = UP2X_TAPS * 2
+            val c = (n - 1) / 2.0
+            val i0b = besselI0(UP2X_BETA)
+            val proto = DoubleArray(n)
+            for (p in 0 until n) {
+                val t = (p - c) / c
+                val w = besselI0(UP2X_BETA * Math.sqrt((1.0 - t * t).coerceAtLeast(0.0))) / i0b
+                val d = 2.0 * UP2X_FC * (p - c)
+                val s = if (abs(d) < 1e-12) 1.0 else Math.sin(Math.PI * d) / (Math.PI * d)
+                proto[p] = 2.0 * UP2X_FC * s * w
+            }
+            var se = 0.0
+            var so = 0.0
+            for (i in 0 until UP2X_TAPS) {
+                se += proto[2 * i]
+                so += proto[2 * i + 1]
+            }
+            for (i in 0 until UP2X_TAPS) {
+                UP2X_EVEN[i] = (proto[2 * i] / se).toFloat()
+                UP2X_ODD[i] = (proto[2 * i + 1] / so).toFloat()
+            }
+        }
     }
 }

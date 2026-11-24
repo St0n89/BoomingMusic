@@ -434,7 +434,7 @@
     <string name="skip_silence_title">Pause überspringen</string>
     <string name="skip_silence_description">Erkennt und überspringt automatisch Pausen. Ideal für Podcasts und Sprachaufnahmen.</string>
     <string name="enable_clear_audio_title">ClearAudio+ (DSEE AI)</string>
-    <string name="enable_clear_audio_description">Voller ClearAudio+-Modus: rekonstruiert hohe Frequenzen mit einer Software-Nachbildung von Sonys DSEE AI. Solange aktiv, werden Equalizer und ReplayGain umgangen, wie bei einem Sony Walkman. 44,1-kHz- und 48-kHz-Quellen.</string>
+    <string name="enable_clear_audio_description">Voller ClearAudio+-Modus: rekonstruiert hohe Frequenzen mit einer Software-Nachbildung von Sonys DSEE AI. Solange aktiv, werden Equalizer und ReplayGain umgangen, wie bei einem Sony Walkman. 44,1-kHz- und 48-kHz-Quellen. Jederzeit umschaltbar, auch mitten im Song.</string>
     <string name="clear_audio_is_active">ClearAudio+ ist aktiv</string>
     <string name="clear_audio_anti_clip_title">Übersteuerungsschutz</string>
     <string name="clear_audio_anti_clip_description">Fängt Pegelspitzen der ClearAudio+-Kette weich ab (9-kHz-Weiche, adaptiver HF-Deckel bei -27 dBFS, sanftes Knie) und ist auf Bypass-Lautstärke kalibriert, damit der An/Aus-Vergleich ohne Lautheitssprung möglich ist. Die Originalkette liefert Spitzen bis +31 dB über Vollpegel; ungefangen würden sie beim 16-Bit-PCM-Clipping hörbar knistern. Aus bedeutet: unveränderte Originalkette.</string>
