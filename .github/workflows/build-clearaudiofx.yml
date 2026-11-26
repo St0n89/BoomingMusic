@@ -70,6 +70,46 @@ jobs:
             standalone/clearaudiofx/dist/ClearAudioFX-magisk-v1.1.zip
           if-no-files-found: error
 
+  bridge-apk:
+    name: Bruecken-APK (ClearAudioBridge, no-root Uebergangsloesung)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: SDK-Pakete (platform 35, vorinstallierter SDK-Manager)
+        run: |
+          SDKM=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
+          yes | $SDKM --licenses > /dev/null || true
+          $SDKM "platforms;android-35" "build-tools;35.0.0" "platform-tools" > /dev/null
+          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: APK bauen (debug-signed)
+        working-directory: standalone/clearaudiofx/bridgeapp
+        run: gradle --no-daemon assembleDebug
+
+      - name: APK-Pruefung
+        working-directory: standalone/clearaudiofx/bridgeapp
+        run: |
+          ls -la app/build/outputs/apk/debug/
+          ${ANDROID_HOME}/build-tools/35.0.0/aapt dump badging \
+            app/build/outputs/apk/debug/app-debug.apk | head -5
+
+      - name: Artefakt hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: clearaudiobridge-apk
+          path: |
+            standalone/clearaudiofx/bridgeapp/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
   tile-apk:
     name: Tile-APK (ClearAudioTile)
     runs-on: ubuntu-latest

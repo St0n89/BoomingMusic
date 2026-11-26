@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ClearAudio Brücke</string>
+    <string name="status_fmt">Status: %1$s</string>
+    <string name="status_on">AKTIV</string>
+    <string name="status_off">AUS</string>
+    <string name="status_blocked">BLOCKIERT auf diesem Gerät</string>
+    <string name="btn_toggle_on">Brücke einschalten</string>
+    <string name="btn_toggle_off">Brücke ausschalten</string>
+    <string name="hint">Übergangslösung ohne Root: Plattform-EQ auf dem
+globalen Output-Mix (Session 0) mit der Eq10-UNIQUE-Kurve der
+ClearAudio+-App. Nur die EQ-Kurve, KEINE Dsx-Kette und KEIN AntiClip.
+Wirkt auf jede App, wenn das Gerät Session-0-Effekte erlaubt; manche
+Geräte blockieren das (Status zeigt den Fehler). Die volle Kette
+gibt es nur über das Magisk-Modul (Root). Der Dienst bleibt im
+Hintergrund aktiv, solange die Brücke an ist.</string>
+</resources>
