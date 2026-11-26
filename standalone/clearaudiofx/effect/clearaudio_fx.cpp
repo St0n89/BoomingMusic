@@ -10,8 +10,17 @@
 // SElbigen ROD_SA-Kern als Anti-Alias-Synthese. RE-abgeleitet, aber NICHT
 // bit-identisch mit dem Walkman (kein 2x-Ausgang moeglich).
 //
+// v1.1 App-Paritaet: auf dem 2x-Signal NACH der Chain laufen wie in der
+// App (ClearAudioAudioProcessor) Eq10 UNIQUE (Firmware-Kernel 0x11b8f0,
+// bit-exakt gegen aa64emu-Fixtures, engine/eq10_test.cpp als CI-Gate,
+// 3584/3584) und AntiClip v3.1 (-4.9 dB, LP-Split @9 kHz, Env-Deckel
+// -31 dBFS, Exp-Knie ab 0.9). 44.1-k-Stream = COEFFS_882, 48-k = 96K.
+//
 // Schalter: System-Property persist.clearaudio.enabled (Tile-APK via su),
-// gepollt ~alle 40 ms, gebounct auf process()-Framezaehler.
+// gepollt ~alle 40 ms, gebounct auf process()-Framezaehler. Uebergang
+// an/aus: Raised-Cosine-Crossfade ueber 64 Frames zwischen Wet und Dry
+// (kein Knackser mehr, App-Muster aus KNOWLEDGE 385); Mass-Bilanz des
+// Reservoirs hält Dry und Wet slot-genau aligned (Slot n = Wet n).
 //
 // Requests/Kommentare: tarvos/Dennis, RE-Stand 294.
 #include <hardware/audio_effect.h>
@@ -19,9 +28,11 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <stdio.h>
+#include <math.h>
 #include <new>
 
 #include "../engine/clear_chain.h"
+#include "../engine/eq10.h"
 
 #ifdef __ANDROID__
 #include <sys/system_properties.h>
@@ -66,15 +77,34 @@ struct ClearContext {
     // Dezimator-Historie: letzte 24 Samples der 2x-Reihe je Kanal
     float prevUL[24];
     float prevUR[24];
+    // App-Paritaet v1.1: Eq10 UNIQUE + AntiClip v3.1 auf dem 2x-Signal
+    clearaudio::Eq10Channel eqL;
+    clearaudio::Eq10Channel eqR;
+    clearaudio::AntiClipChannel acL;
+    clearaudio::AntiClipChannel acR;
+    // Toggle-Crossfade (Wet <-> Dry, Raised Cosine ueber 64 Frames)
+    float g;             // aktueller Wet-Anteil [0..1]
+    bool on;             // letzter Sollzustand (Property)
+    bool fading;
+    float fadeFrom;
+    float fadeTo;
+    int fadePos;
+    bool needsReset;     // nach Fade-auf-AUS: States einmalig nullen
     // Property-Poll-Zustand
     bool propEnabled;
     int framesSincePropPoll;
 
     explicit ClearContext(uint32_t sr)
         : itfe(nullptr), chL(sr), chR(sr), sampleRate(sr),
+          eqL(clearaudio::eq10_coeffs_for_rate(sr)),
+          eqR(clearaudio::eq10_coeffs_for_rate(sr)),
           configured(false), bypass(false),
           inFill(0), outRead(0), outWrite(0),
+          g(0.0f), on(false), fading(false),
+          fadeFrom(0.0f), fadeTo(0.0f), fadePos(0), needsReset(false),
           propEnabled(false), framesSincePropPoll(0) {
+        acL.init(2 * sr);
+        acR.init(2 * sr);
         memset(inL, 0, sizeof(inL));
         memset(inR, 0, sizeof(inR));
         memset(outL, 0, sizeof(outL));
@@ -86,6 +116,10 @@ struct ClearContext {
     void resetStreams() {
         chL.reset();
         chR.reset();
+        eqL.reset();
+        eqR.reset();
+        acL.reset();
+        acR.reset();
         memset(inL, 0, sizeof(inL));
         memset(inR, 0, sizeof(inR));
         memset(outL, 0, sizeof(outL));
@@ -95,6 +129,10 @@ struct ClearContext {
         inFill = 0;
         outRead = 0;
         outWrite = 0;
+        g = 0.0f;
+        on = false;
+        fading = false;
+        fadePos = 0;
     }
 };
 
@@ -143,6 +181,26 @@ bool propIsEnabled(ClearContext* c) {
 #endif
 }
 
+// ---------- Toggle-Crossfade ----------
+// Raised Cosine ueber 64 Frames zwischen Dry (Property-AUS) und Wet
+// (Property-AN). Mass-Bilanz: jede 64er-Eingangsblock erzeugt 64 Wet-
+// Frames, Ausgabe-Slot n erhaelt Wet n, deshalb ist Dry = in[n] exakt
+// slot-aligned (auch in-place: Slot n wird immer erst NACH Iteration n
+// geschrieben, weil Emissionen erst nach dem ersten Block beginnen).
+float advanceFade(ClearContext* c) {
+    if (c->fading) {
+        const float w = 0.5f *
+            (1.0f - cosf(3.14159265358979323846f * (float)c->fadePos / 64.0f));
+        c->g = c->fadeFrom + (c->fadeTo - c->fadeFrom) * w;
+        if (++c->fadePos >= 64) {
+            c->g = c->fadeTo;
+            c->fading = false;
+            if (c->fadeTo == 0.0f) c->needsReset = true;
+        }
+    }
+    return c->g;
+}
+
 // ---------- Interface-Funktionen ----------
 int32_t proc_process(effect_handle_t self, audio_buffer_t* inb,
                      audio_buffer_t* outb) {
@@ -162,7 +220,34 @@ int32_t proc_process(effect_handle_t self, audio_buffer_t* inb,
     float* out = outb->f32 != nullptr ? outb->f32 : (float*)outb->raw;
     const size_t outCap = outb->frameCount;
 
-    if (c->bypass || !propIsEnabled(c) || !c->configured) {
+    if (c->bypass || !c->configured) {
+        size_t n = frames < outCap ? frames : outCap;
+        if (in == out) return 0;              // in-place: nichts zu tun
+        memcpy(out, in, n * 2 * sizeof(float));
+        if (n < outCap && outCap == frames) memset(out + n * 2, 0,
+            (outCap - n) * 2 * sizeof(float));
+        outb->frameCount = n;
+        return 0;
+    }
+
+    // Sollzustand uebernehmen; Aenderung startet den 64-Frame-Crossfade
+    const bool wantOn = propIsEnabled(c);
+    if (wantOn != c->on) {
+        c->fading = true;
+        c->fadeFrom = c->g;
+        c->fadeTo = wantOn ? 1.0f : 0.0f;
+        c->fadePos = 0;
+        c->on = wantOn;
+    }
+
+    // Voll-AUS (kein Fade mehr unterwegs): reine Kopie, DSP-States beim
+    // ersten Voll-AUS-Aufruf einmalig nullen (sauberer Kaltstart beim
+    // naechsten Einschalten, Fade-in maskiert das Einsetzen).
+    if (!c->on && !c->fading) {
+        if (c->needsReset) {
+            c->resetStreams();
+            c->needsReset = false;
+        }
         size_t n = frames < outCap ? frames : outCap;
         if (in == out) return 0;              // in-place: nichts zu tun
         memcpy(out, in, n * 2 * sizeof(float));
@@ -186,6 +271,17 @@ int32_t proc_process(effect_handle_t self, audio_buffer_t* inb,
             float oL[128], oR[128];
             c->chL.processBlock(c->inL, oL);
             c->chR.processBlock(c->inR, oR);
+            // v1.1 App-Paritaet: Eq10 UNIQUE (2x64er-Subblocks wie der
+            // Firmware-Kernel) + AntiClip v3.1 auf dem 2x-Signal, VOR
+            // der Dezimation (App-Reihenfolge: Chain -> Eq10 -> AntiClip).
+            c->eqL.processBlock64(oL);
+            c->eqL.processBlock64(oL + 64);
+            c->eqR.processBlock64(oR);
+            c->eqR.processBlock64(oR + 64);
+            for (int i = 0; i < 128; i++) {
+                oL[i] = c->acL.process(oL[i]);
+                oR[i] = c->acR.process(oR[i]);
+            }
             float dL[64], dR[64];
             const clearaudio::FcTables* fc = clearaudio::fc_for_rate(
                 c->sampleRate);
@@ -197,18 +293,26 @@ int32_t proc_process(effect_handle_t self, audio_buffer_t* inb,
             c->outWrite = 64;
             c->inFill = 0;
         }
-        // Aus sofern verfuegbar
+        // Aus sofern verfuegbar; Crossfade gegen Dry (= Input-Slot)
         if (c->outWrite > c->outRead && producedPos < outCap) {
-            out[2 * producedPos] = c->outL[c->outRead];
-            out[2 * producedPos + 1] = c->outR[c->outRead];
+            const float gw = advanceFade(c);
+            const float gd = 1.0f - gw;
+            out[2 * producedPos] = c->outL[c->outRead] * gw +
+                                   in[2 * producedPos] * gd;
+            out[2 * producedPos + 1] = c->outR[c->outRead] * gw +
+                                       in[2 * producedPos + 1] * gd;
             c->outRead++;
             producedPos++;
         }
     }
     // weitere fertig verfuegbare Frames aus dem Reservoir
     while (c->outWrite > c->outRead && producedPos < outCap) {
-        out[2 * producedPos] = c->outL[c->outRead];
-        out[2 * producedPos + 1] = c->outR[c->outRead];
+        const float gw = advanceFade(c);
+        const float gd = 1.0f - gw;
+        out[2 * producedPos] = c->outL[c->outRead] * gw +
+                               in[2 * producedPos] * gd;
+        out[2 * producedPos + 1] = c->outR[c->outRead] * gw +
+                                   in[2 * producedPos + 1] * gd;
         c->outRead++;
         producedPos++;
     }

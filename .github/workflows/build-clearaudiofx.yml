@@ -21,13 +21,16 @@ jobs:
           unzip -q ndk.zip
           echo "$PWD/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin" >> $GITHUB_PATH
 
-      - name: Engine-Abnahme (bit-exakt, FAIL>0 = Job failed)
+      - name: Engine-Abnahme (bit-exakt, inkl. Eq10-Fixtures; FAIL>0 = Job failed)
         working-directory: standalone/clearaudiofx/engine
         run: |
           clang++ -std=c++17 -O2 -ffp-contract=off -fno-fast-math \
             -o engine_test engine_test.cpp clear_chain.cpp engine_gen.cpp \
             fc_tables.cpp fixtures.cpp
           ./engine_test
+          clang++ -std=c++17 -O2 -ffp-contract=off -fno-fast-math \
+            -o eq10_test eq10_test.cpp eq10.cpp
+          ./eq10_test
 
       - name: Effect-Smoke (nativ, create/config/enable/process/release)
         working-directory: standalone/clearaudiofx
@@ -35,7 +38,8 @@ jobs:
           clang++ -std=c++17 -O2 -ffp-contract=off -fno-fast-math \
             -Ieffect/include \
             -o effect_smoke effect/effect_smoke.cpp effect/clearaudio_fx.cpp \
-            engine/clear_chain.cpp engine/engine_gen.cpp engine/fc_tables.cpp
+            engine/clear_chain.cpp engine/engine_gen.cpp engine/fc_tables.cpp \
+            engine/eq10.cpp
           ./effect_smoke
 
       - name: libclearaudiofx.so (aarch64, API 21)
@@ -45,6 +49,7 @@ jobs:
             -ffp-contract=off -fno-fast-math -Ieffect/include \
             -o dist_libclearaudiofx.so effect/clearaudio_fx.cpp \
             engine/clear_chain.cpp engine/engine_gen.cpp engine/fc_tables.cpp \
+            engine/eq10.cpp \
             -static-libstdc++
 
       - name: Magisk-Modul-Zip
@@ -54,15 +59,15 @@ jobs:
           rm -rf dist/module && mkdir -p dist/module
           cp magisk/module.prop magisk/customize.sh magisk/README.md dist/module/
           cp dist_libclearaudiofx.so dist/module/libclearaudiofx.so
-          (cd dist/module && zip -r -X ../ClearAudioFX-magisk-v1.0.zip .)
-          unzip -l dist/ClearAudioFX-magisk-v1.0.zip
+          (cd dist/module && zip -r -X ../ClearAudioFX-magisk-v1.1.zip .)
+          unzip -l dist/ClearAudioFX-magisk-v1.1.zip
 
       - name: Artefakt hochladen
         uses: actions/upload-artifact@v4
         with:
           name: clearaudiofx-magisk-module
           path: |
-            standalone/clearaudiofx/dist/ClearAudioFX-magisk-v1.0.zip
+            standalone/clearaudiofx/dist/ClearAudioFX-magisk-v1.1.zip
           if-no-files-found: error
 
   tile-apk:
