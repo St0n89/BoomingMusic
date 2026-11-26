@@ -57,7 +57,7 @@ object EqCurve {
         val hi = range[1].toInt()
         val sb = StringBuilder()
         for (b in 0 until nb) {
-            val fcHz = eq.centerFreq[b] / 1000.0   // API liefert milliHz
+            val fcHz = eq.getCenterFreq(b.toShort()) / 1000.0   // API liefert milliHz
             val db = targetDb(fcHz)
             var lvl = (db * 100.0).roundToInt()
             if (lvl < lo) lvl = lo
